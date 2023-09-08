@@ -9,5 +9,7 @@
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="library" name="@types/gapi" level="application" />
+    <orderEntry type="library" name="@types/gapi.client.secretmanager" level="application" />
   </component>
 </module>

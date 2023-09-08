@@ -1,21 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { useDrop, DndProvider } from 'react-dnd';
+import React, { useState } from 'react';
+import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
+import { encrypt, generateKey, readKey, decryptKey, readPrivateKey, createMessage } from 'openpgp';
 import RuleList from './RuleList';
-import { db } from './firebase';
-import { collection, setDoc, doc, getDoc, updateDoc, getCountFromServer, onSnapshot, arrayUnion, arrayRemove, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { db, generateElectionKeys, calculateResults } from './firebase';
+import { collection, setDoc, doc, getDoc, updateDoc, getCountFromServer, arrayUnion, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import './App.css';
-
 import crypto from 'crypto';
+import Web3, {Transaction} from 'web3';
 
+//custom type definitions
 type GroupPreview = { unique: string, name: string };
 type GroupData = { unique: string, name: string, description: string, founder: string, banned: Array<string>, invites: Array<string>, private: boolean, categories: Array<string> };
 type RoleData = { name: string, canBan: boolean, canDemote: boolean, canPromote: boolean, canKick: boolean, canEditGroup: boolean, canEditRoles: boolean, createElections: boolean };
 type UserData = { name: string, groups: Array<string>, hash: string, salt: string, iterations: number };
-type ElectionData = { unique: string, name: string, description: string, creator: string, category: string[], closed: boolean, ended: boolean, options: string[], counts: number[], percentages: number[] };
-type VoterData = { unique: string, vote: number, delegation: string, weight: number };
+type ElectionData = { unique: string, name: string, description: string, creator: string, category: string[], deadline: Date, ended: boolean, options: string[], counts: number[], percentages: number[], pubKey: string, address: string };
+type VoterData = { unique: string, vote: number, delegation: string, weight: number, blockchain: boolean, pubKey?: string, time: number };
 type DelegationRule = { unique: string, condition: string, action: string, delegation: string };
-type MemberData = { username: string, displayName: string, role: string, hideID: boolean, rules: DelegationRule[] };
+type MemberData = { username: string, displayName: string, role: string, hideID: boolean, rules?: DelegationRule[], pubKey?: string };
+
 
 const defaultFounder: RoleData = { name: 'founder', canEditGroup: true, canEditRoles: true, canKick: true,
 	canBan: true, createElections: true, canPromote: true, canDemote: true };
@@ -25,11 +28,11 @@ const defaultMember:RoleData = { name: 'member', canEditGroup: false, canEditRol
 	canBan: false, createElections: false, canPromote: false, canDemote: false };
 
 function App() {
+	//variables related to the user
 	const [username, setUsername] = useState("");
 	const [displayName, setDisplayName] = useState("");
 	const [password, setPassword] = useState("");
 	const [confirmPassword, setConfirmPassword] = useState("");
-	const [userSnap, setUserSnap] = useState<UserData>();
 	const [darkMode, setDarkMode] = useState(false);
 	
 	const [elections, setElections] = useState<ElectionData[]>([]);
@@ -65,6 +68,7 @@ function App() {
 	const [electionScores, setElectionScores] = useState<number[]>();
 	const [electionCategories, setElectionCategories] = useState<string[]>([]);
 	const [options, setOptions] = useState(['']);
+	const [deadline, setDeadline] = useState("");
 	
 	const [rules, setRules] = useState<Array<DelegationRule>>([]);
 	const [categories, setCategories] = useState<string[]>([]);
@@ -83,6 +87,19 @@ function App() {
 	const [isElections, setIsElections] = useState(false);
 	const [editingDisplay, setEditingDisplay] = useState(false);
 	const [isRules, setIsRules] = useState(false);
+	const [isSecurity, setIsSecurity] = useState(false);
+	const [isVoting, setIsVoting] = useState(false);
+	
+	const [addingKey, setAddingKey] = useState(false);
+	const [pubKey, setPubKey] = useState("");
+	const [secureVoting, setSecureVoting] = useState(false);
+	const [passphrase, setPassphrase] = useState("");
+	const [newPub, setNewPub] = useState("");
+	const [newPriv, setNewPriv] = useState("");
+	const [madeKeys, setMadeKeys] = useState(false);
+	const [voteData, setVoteData] = useState<VoterData>();
+	const [message, setMessage] = useState("");
+	const [encrypted, setEncrypted] = useState("");
 	
 	const [errorMsg, setErrorMsg] = useState("");
 	const [usernameError, setUsernameError] = useState(false);
@@ -90,6 +107,166 @@ function App() {
 	const [passwordError, setPasswordError] = useState(false);
 	const [confirmPasswordError, setConfirmPasswordError] = useState(false);
 	
+	const web3 = new Web3(new Web3.providers.HttpProvider('http://localhost:8545'));  //new Web3('https://9bd6-146-70-70-227.ngrok.io');
+	const contractABI = [
+		{
+			"inputs": [
+				{
+					"internalType": "string",
+					"name": "_electionName",
+					"type": "string"
+				}
+			],
+			"stateMutability": "nonpayable",
+			"type": "constructor"
+		},
+		{
+			"inputs": [],
+			"name": "electionName",
+			"outputs": [
+				{
+					"internalType": "string",
+					"name": "",
+					"type": "string"
+				}
+			],
+			"stateMutability": "view",
+			"type": "function",
+			"constant": true
+		},
+		{
+			"inputs": [
+				{
+					"internalType": "bytes",
+					"name": "",
+					"type": "bytes"
+				},
+				{
+					"internalType": "uint256",
+					"name": "",
+					"type": "uint256"
+				}
+			],
+			"name": "overflowVotes",
+			"outputs": [
+				{
+					"internalType": "string",
+					"name": "",
+					"type": "string"
+				}
+			],
+			"stateMutability": "view",
+			"type": "function",
+			"constant": true
+		},
+		{
+			"inputs": [
+				{
+					"internalType": "uint256",
+					"name": "",
+					"type": "uint256"
+				}
+			],
+			"name": "voters",
+			"outputs": [
+				{
+					"internalType": "bytes",
+					"name": "",
+					"type": "bytes"
+				}
+			],
+			"stateMutability": "view",
+			"type": "function",
+			"constant": true
+		},
+		{
+			"inputs": [
+				{
+					"internalType": "bytes",
+					"name": "",
+					"type": "bytes"
+				}
+			],
+			"name": "votes",
+			"outputs": [
+				{
+					"internalType": "string",
+					"name": "",
+					"type": "string"
+				}
+			],
+			"stateMutability": "view",
+			"type": "function",
+			"constant": true
+		},
+		{
+			"inputs": [
+				{
+					"internalType": "bytes",
+					"name": "voterId",
+					"type": "bytes"
+				},
+				{
+					"internalType": "string",
+					"name": "encryptedVote",
+					"type": "string"
+				}
+			],
+			"name": "vote",
+			"outputs": [],
+			"stateMutability": "nonpayable",
+			"type": "function"
+		},
+		{
+			"inputs": [],
+			"name": "getVoters",
+			"outputs": [
+				{
+					"internalType": "bytes[]",
+					"name": "",
+					"type": "bytes[]"
+				}
+			],
+			"stateMutability": "view",
+			"type": "function",
+			"constant": true
+		},
+		{
+			"inputs": [],
+			"name": "getEncryptedVotes",
+			"outputs": [
+				{
+					"internalType": "string[]",
+					"name": "",
+					"type": "string[]"
+				}
+			],
+			"stateMutability": "view",
+			"type": "function",
+			"constant": true
+		},
+		{
+			"inputs": [
+				{
+					"internalType": "bytes",
+					"name": "voterId",
+					"type": "bytes"
+				}
+			],
+			"name": "getOverflowVotes",
+			"outputs": [
+				{
+					"internalType": "string[]",
+					"name": "",
+					"type": "string[]"
+				}
+			],
+			"stateMutability": "view",
+			"type": "function",
+			"constant": true
+		}
+	];
+	const bytecode = '0x60806040523480156200001157600080fd5b506040516200168038038062001680833981810160405281019062000037919062000179565b80600390805190602001906200004f92919062000057565b5050620002ef565b82805462000065906200025b565b90600052602060002090601f016020900481019282620000895760008555620000d5565b82601f10620000a457805160ff1916838001178555620000d5565b82800160010185558215620000d5579182015b82811115620000d4578251825591602001919060010190620000b7565b5b509050620000e49190620000e8565b5090565b5b8082111562000103576000816000905550600101620000e9565b5090565b60006200011e6200011884620001f2565b620001be565b9050828152602081018484840111156200013757600080fd5b6200014484828562000225565b509392505050565b600082601f8301126200015e57600080fd5b81516200017084826020860162000107565b91505092915050565b6000602082840312156200018c57600080fd5b600082015167ffffffffffffffff811115620001a757600080fd5b620001b5848285016200014c565b91505092915050565b6000604051905081810181811067ffffffffffffffff82111715620001e857620001e7620002c0565b5b8060405250919050565b600067ffffffffffffffff82111562000210576200020f620002c0565b5b601f19601f8301169050602081019050919050565b60005b838110156200024557808201518184015260208101905062000228565b8381111562000255576000848401525b50505050565b600060028204905060018216806200027457607f821691505b602082108114156200028b576200028a62000291565b5b50919050565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052602260045260246000fd5b7f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b61138180620002ff6000396000f3fe608060405234801561001057600080fd5b50600436106100885760003560e01c80639a6efcc01161005b5780639a6efcc014610127578063cdd7225314610145578063da58c7d914610163578063dfed58dd1461019357610088565b806301c3a6ca1461008d5780632072cdd1146100a957806371f1a3d1146100d957806385e8e7a714610109575b600080fd5b6100a760048036038101906100a29190610cb8565b6101c3565b005b6100c360048036038101906100be9190610c77565b6102e6565b6040516100d09190611045565b60405180910390f35b6100f360048036038101906100ee9190610c77565b61039c565b6040516101009190611001565b60405180910390f35b610111610493565b60405161011e9190611045565b60405180910390f35b61012f610521565b60405161013c9190611001565b60405180910390f35b61014d610788565b60405161015a9190610fdf565b60405180910390f35b61017d60048036038101906101789190610d78565b610861565b60405161018a9190611023565b60405180910390f35b6101ad60048036038101906101a89190610d24565b61090d565b6040516101ba9190611045565b60405180910390f35b600080836040516101d49190610fc8565b908152602001604051809103902080546101ed9061121b565b905014610272576001826040516102049190610fc8565b90815260200160405180910390206000836040516102229190610fc8565b9081526020016040518091039020908060018154018082558091505060019003906000526020600020016000909190919091509080546102619061121b565b61026c9291906109dc565b506102af565b6002829080600181540180825580915050600190039060005260206000200160009091909190915090805190602001906102ad929190610a69565b505b806000836040516102c09190610fc8565b908152602001604051809103902090805190602001906102e1929190610aef565b505050565b600081805160208101820180518482526020830160208501208183528095505050505050600091509050805461031b9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546103479061121b565b80156103945780601f1061036957610100808354040283529160200191610394565b820191906000526020600020905b81548152906001019060200180831161037757829003601f168201915b505050505081565b60606001826040516103ae9190610fc8565b9081526020016040518091039020805480602002602001604051908101604052809291908181526020016000905b828210156104885783829060005260206000200180546103fb9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546104279061121b565b80156104745780601f1061044957610100808354040283529160200191610474565b820191906000526020600020905b81548152906001019060200180831161045757829003601f168201915b5050505050815260200190600101906103dc565b505050509050919050565b600380546104a09061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546104cc9061121b565b80156105195780601f106104ee57610100808354040283529160200191610519565b820191906000526020600020905b8154815290600101906020018083116104fc57829003601f168201915b505050505081565b6060600060028054905067ffffffffffffffff81111561056a577f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b60405190808252806020026020018201604052801561059d57816020015b60608152602001906001900390816105885790505b50905060005b600280549050811015610780576000600282815481106105ec577f4e487b7100000000000000000000000000000000000000000000000000000000600052603260045260246000fd5b9060005260206000200180546106019061121b565b80601f016020809104026020016040519081016040528092919081815260200182805461062d9061121b565b801561067a5780601f1061064f5761010080835404028352916020019161067a565b820191906000526020600020905b81548152906001019060200180831161065d57829003601f168201915b505050505090506000816040516106919190610fc8565b908152602001604051809103902080546106aa9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546106d69061121b565b80156107235780601f106106f857610100808354040283529160200191610723565b820191906000526020600020905b81548152906001019060200180831161070657829003601f168201915b5050505050838381518110610761577f4e487b7100000000000000000000000000000000000000000000000000000000600052603260045260246000fd5b60200260200101819052505080806107789061124d565b9150506105a3565b508091505090565b60606002805480602002602001604051908101604052809291908181526020016000905b828210156108585783829060005260206000200180546107cb9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546107f79061121b565b80156108445780601f1061081957610100808354040283529160200191610844565b820191906000526020600020905b81548152906001019060200180831161082757829003601f168201915b5050505050815260200190600101906107ac565b50505050905090565b6002818154811061087157600080fd5b90600052602060002001600091509050805461088c9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546108b89061121b565b80156109055780601f106108da57610100808354040283529160200191610905565b820191906000526020600020905b8154815290600101906020018083116108e857829003601f168201915b505050505081565b600182805160208101820180518482526020830160208501208183528095505050505050818154811061093f57600080fd5b9060005260206000200160009150915050805461095b9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546109879061121b565b80156109d45780601f106109a9576101008083540402835291602001916109d4565b820191906000526020600020905b8154815290600101906020018083116109b757829003601f168201915b505050505081565b8280546109e89061121b565b90600052602060002090601f016020900481019282610a0a5760008555610a58565b82601f10610a1b5780548555610a58565b82800160010185558215610a5857600052602060002091601f016020900482015b82811115610a57578254825591600101919060010190610a3c565b5b509050610a659190610b75565b5090565b828054610a759061121b565b90600052602060002090601f016020900481019282610a975760008555610ade565b82601f10610ab057805160ff1916838001178555610ade565b82800160010185558215610ade579182015b82811115610add578251825591602001919060010190610ac2565b5b509050610aeb9190610b75565b5090565b828054610afb9061121b565b90600052602060002090601f016020900481019282610b1d5760008555610b64565b82601f10610b3657805160ff1916838001178555610b64565b82800160010185558215610b64579182015b82811115610b63578251825591602001919060010190610b48565b5b509050610b719190610b75565b5090565b5b80821115610b8e576000816000905550600101610b76565b5090565b6000610ba5610ba084611098565b611067565b905082815260208101848484011115610bbd57600080fd5b610bc88482856111d9565b509392505050565b6000610be3610bde846110c8565b611067565b905082815260208101848484011115610bfb57600080fd5b610c068482856111d9565b509392505050565b600082601f830112610c1f57600080fd5b8135610c2f848260208601610b92565b91505092915050565b600082601f830112610c4957600080fd5b8135610c59848260208601610bd0565b91505092915050565b600081359050610c7181611334565b92915050565b600060208284031215610c8957600080fd5b600082013567ffffffffffffffff811115610ca357600080fd5b610caf84828501610c0e565b91505092915050565b60008060408385031215610ccb57600080fd5b600083013567ffffffffffffffff811115610ce557600080fd5b610cf185828601610c0e565b925050602083013567ffffffffffffffff811115610d0e57600080fd5b610d1a85828601610c38565b9150509250929050565b60008060408385031215610d3757600080fd5b600083013567ffffffffffffffff811115610d5157600080fd5b610d5d85828601610c0e565b9250506020610d6e85828601610c62565b9150509250929050565b600060208284031215610d8a57600080fd5b6000610d9884828501610c62565b91505092915050565b6000610dad8383610eb3565b905092915050565b6000610dc18383610f56565b905092915050565b6000610dd482611118565b610dde818561115e565b935083602082028501610df0856110f8565b8060005b85811015610e2c5784840389528151610e0d8582610da1565b9450610e1883611144565b925060208a01995050600181019050610df4565b50829750879550505050505092915050565b6000610e4982611123565b610e53818561116f565b935083602082028501610e6585611108565b8060005b85811015610ea15784840389528151610e828582610db5565b9450610e8d83611151565b925060208a01995050600181019050610e69565b50829750879550505050505092915050565b6000610ebe8261112e565b610ec88185611180565b9350610ed88185602086016111e8565b610ee181611323565b840191505092915050565b6000610ef78261112e565b610f018185611191565b9350610f118185602086016111e8565b610f1a81611323565b840191505092915050565b6000610f308261112e565b610f3a81856111a2565b9350610f4a8185602086016111e8565b80840191505092915050565b6000610f6182611139565b610f6b81856111ad565b9350610f7b8185602086016111e8565b610f8481611323565b840191505092915050565b6000610f9a82611139565b610fa481856111be565b9350610fb48185602086016111e8565b610fbd81611323565b840191505092915050565b6000610fd48284610f25565b915081905092915050565b60006020820190508181036000830152610ff98184610dc9565b905092915050565b6000602082019050818103600083015261101b8184610e3e565b905092915050565b6000602082019050818103600083015261103d8184610eec565b905092915050565b6000602082019050818103600083015261105f8184610f8f565b905092915050565b6000604051905081810181811067ffffffffffffffff8211171561108e5761108d6112f4565b5b8060405250919050565b600067ffffffffffffffff8211156110b3576110b26112f4565b5b601f19601f8301169050602081019050919050565b600067ffffffffffffffff8211156110e3576110e26112f4565b5b601f19601f8301169050602081019050919050565b6000819050602082019050919050565b6000819050602082019050919050565b600081519050919050565b600081519050919050565b600081519050919050565b600081519050919050565b6000602082019050919050565b6000602082019050919050565b600082825260208201905092915050565b600082825260208201905092915050565b600082825260208201905092915050565b600082825260208201905092915050565b600081905092915050565b600082825260208201905092915050565b600082825260208201905092915050565b6000819050919050565b82818337600083830152505050565b60005b838110156112065780820151818401526020810190506111eb565b83811115611215576000848401525b50505050565b6000600282049050600182168061123357607f821691505b60208210811415611247576112466112c5565b5b50919050565b6000611258826111cf565b91507fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff82141561128b5761128a611296565b5b600182019050919050565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052601160045260246000fd5b7f4e487b7100000000000000000000000000000000000000000000000000000000600052602260045260246000fd5b7f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b6000601f19601f8301169050919050565b61133d816111cf565b811461134857600080fd5b5056fea2646970667358221220529c5bd972113a460dbcc8093e82ce200ac383c826c301115c3e05cb17b9d46b64736f6c63430008000033';
 	
 	const usersRef = collection(db, "users");
 	const groupsRef = collection(db, "groups");
@@ -143,6 +320,8 @@ function App() {
 		setIsPermissions(false);
 		setIsElections(false);
 		setIsRules(false);
+		setIsSecurity(false);
+		setIsVoting(false);
 	};
 	const moveToSignIn = () => {
 		setIsSignUp(false);
@@ -155,6 +334,8 @@ function App() {
 		setIsPermissions(false);
 		setIsElections(false);
 		setIsRules(false);
+		setIsSecurity(false);
+		setIsVoting(false);
 	};
 	const moveToLoggedIn = () => {
 		clearErrors();
@@ -166,6 +347,11 @@ function App() {
 		setIsPermissions(false);
 		setIsElections(false);
 		setIsRules(false);
+		setAddingKey(false);
+		setIsSecurity(false);
+		setPassphrase("");
+		setExpDesc(true);
+		setIsVoting(false);
 	};
 	const moveToCreateGroup = () => {
 		clearErrors();
@@ -182,6 +368,8 @@ function App() {
 		setIsPermissions(false);
 		setIsElections(false);
 		setIsRules(false);
+		setIsSecurity(false);
+		setIsVoting(false);
 	};
 	const moveToEditPermissions = () => {
 		clearErrors();
@@ -200,6 +388,8 @@ function App() {
 		setIsPermissions(false);
 		setIsElections(false);
 		setIsRules(false);
+		setIsSecurity(false);
+		setIsVoting(false);
 	};
 	const moveToEditGroup = () => {
 		clearErrors();
@@ -216,6 +406,8 @@ function App() {
 		setIsPermissions(false);
 		setIsElections(false);
 		setIsRules(false);
+		setIsSecurity(false);
+		setIsVoting(false);
 	};
 	const moveToElections = () => {
 		clearErrors();
@@ -232,6 +424,8 @@ function App() {
 		setIsFinding(false);
 		setIsPermissions(false);
 		setIsRules(false);
+		setIsSecurity(false);
+		setIsVoting(false);
 	};
 	const moveToRules = async () => {
 		if (selectedGroup) {
@@ -245,10 +439,50 @@ function App() {
 			setIsFinding(false);
 			setIsPermissions(false);
 			setIsRules(true);
+			setIsSecurity(false);
+			setIsVoting(false);
 		}
 	};
+	const moveToSecurity = () => {
+		clearErrors();
+		setLoggedIn(true);
+		setIsElections(false);
+		setIsCreating(false);
+		setIsEditing(false);
+		setIsFinding(false);
+		setIsPermissions(false);
+		setIsRules(false);
+		setIsSecurity(true);
+		setAddingKey(secureVoting);
+		setPassphrase("");
+		setMadeKeys(false);
+		setIsVoting(false);
+	};
+	const moveToVoting = () => {
+		clearErrors();
+		if (selectedElection) {
+			setNewPub(selectedElection.pubKey);
+			setNewPriv("");
+			setEncrypted("");
+		}
+		setLoggedIn(true);
+		setIsCreating(false);
+		setIsEditing(false);
+		setIsFinding(false);
+		setIsPermissions(false);
+		setIsElections(false);
+		setIsRules(false);
+		setIsSecurity(false);
+		setIsVoting(true);
+	};
 	
-	
+	const cancel = async () => {
+		if (selectedGroup) {
+			const unique = selectedGroup.unique;
+			moveToLoggedIn();
+			await selectGroup(unique);
+		}
+	};
 	//snapshot listener for group finding search
 	const fetchGroups =  async (search: string) => {
 		try {
@@ -274,7 +508,6 @@ function App() {
 	const getGroups = async () => {
 		try {
 			const snap = await getDoc(doc(usersRef, username));
-			setUserSnap(snap.data() as UserData);
 			if (!(snap.exists())) {
 				setUsernameError(true);
 				setErrorMsg("User account not found");
@@ -321,11 +554,36 @@ function App() {
 			setSelectedGroup(data.data() as GroupData);
 			//if (selectedGroup) {
 			let user = memDoc.data() as MemberData;
-			let userRole = user?.role || 'member'; // The ?. is optional chaining in case 'user' is undefined
-			let name = user?.displayName || username;
-			let hide = user?.hideID || false;
-			let rules = user?.rules || [];
-			
+			let userRole: string;
+			let name: string;
+			let hide: boolean;
+			let cat: string[] = data.data().categories;
+			let rules: DelegationRule[];
+			if (user !== undefined) {
+				userRole = user.role;
+				name = user.displayName;
+				hide = user.hideID;
+				if ('rules' in user) {
+					rules = user.rules || [];
+				} else {
+					rules = [];
+				}
+				if ('pubKey' in user) {
+					if ((user.pubKey !== undefined) && (user.pubKey !== "")) {
+						setPubKey(user.pubKey);
+						setSecureVoting(true);
+					} else {
+						setSecureVoting(false);
+					}
+				} else {
+					setSecureVoting(false);
+				}
+			} else {
+				userRole = 'member';
+				name = username;
+				hide = false;
+				rules = [];
+			}
 			let arr: MemberData[] = [];
 			const query = await getDocs(memRef);
 			query.forEach((doc) => {
@@ -346,6 +604,7 @@ function App() {
 			setRoles(rol);
 			
 			//below is data for user
+			setCategories(cat);
 			setGroupHiding(hide);
 			setGroupDisplayName(name);
 			setTempDisplayName(name);
@@ -362,6 +621,7 @@ function App() {
 			setErrorMsg("Group data could not be found");
 		}
 	};
+	
 	const selectMember = (unique: string) => {
 		setSelectedMember(unique);
 	};
@@ -386,6 +646,7 @@ function App() {
 	}, [selectGroup, selectedGroup]);
 	 */
 	
+	
 	const hashPassword = (input: string) => {
 		const salt: string = crypto.randomBytes(128).toString('base64');
 		const iterations: number = 10000;
@@ -401,6 +662,7 @@ function App() {
 			iterations: iterations
 		};
 	};
+	//checks to ensure that password and confirm password are different before hashing
 	const checkPassword = (input: string, salt: string, iterations: number, saved: string ) => {
 		let hash = input;
 		for (let i = 0; i < iterations; i++) {
@@ -484,7 +746,6 @@ function App() {
 		
 		try {
 			const snap = await getDoc(doc(usersRef, username));
-			setUserSnap(snap.data() as UserData);
 			let data: UserData = snap.data() as UserData;
 			if (!(snap.exists())) {
 				setUsernameError(true);
@@ -546,74 +807,105 @@ function App() {
 		const newOptions = [...options];
 		newOptions[index] = event.target.value;
 		setOptions(newOptions);
-	}
+	};
 	const handleAddOption = () => {
 		setOptions([...options, '']);
-	}
+	};
 	const handleDeleteOption = (index: number) => {
 		const newOptions = [...options];
 		newOptions.splice(index, 1);
 		setOptions(newOptions);
-	}
+	};
 	//for election options
 	const handleCategoryChange = (event: React.ChangeEvent<HTMLInputElement>, index: number) => {
 		const newCategories = [...categories];
 		newCategories[index] = event.target.value;
 		setCategories(newCategories);
-	}
+	};
 	const handleAddCategory = () => {
 		setCategories([...categories, '']);
-	}
+	};
 	const handleDeleteCategory = (index: number) => {
 		const newCategories = [...categories];
 		newCategories.splice(index, 1);
 		setCategories(newCategories);
-	}
+	};
 	const handleElectionCreate = async (event: React.FormEvent) => {
 		event.preventDefault();
-		await clearErrors();
-		const newOptions = ['abstain', ...options];
+		clearErrors();
+		const deadlineDate = new Date(deadline);
 		// Create a vote counter array of the same length, populated with 0s
-		const voteCounter = new Array(newOptions.length).fill(0);
+		const voteCounter = new Array(['abstain', ...options].length).fill(0);
 		if (selectedGroup) {
 			try {
 				const unique = selectedGroup.unique;
-				const groupRef = doc(groupsRef, unique);
-				const electionRef = collection(groupRef, 'elections');
-				const docRef = doc(electionRef, electionUnique);
+				const docRef = doc(collection(doc(collection(db, "groups"), unique), 'elections'), electionUnique);
 				const voterRef = collection(docRef, 'voters');
+				
+				const secID = "[projects/*/secrets/*]";
 				const data: ElectionData = {
 					unique: electionUnique,
 					name: electionTitle,
 					description: electionDescription,
 					creator: username,
 					category: electionCategories,
-					closed: electionPrivate,
+					deadline: deadlineDate,
 					ended: false,
-					options: newOptions,
+					options: ['abstain', ...options],
 					counts: voteCounter,
-					percentages: voteCounter
+					percentages: voteCounter,
+					pubKey: "",
+					address: ""
 				};
 				await setDoc(docRef, data);
+				
+				generateElectionKeys({secID: secID, title: electionTitle, group: unique, election: electionUnique})
+					.then((result) => {
+						console.log(result.data);
+					})
+					.catch((error) => {
+						console.log(`Error occurred making election keys`);
+					});
+				
 				try {
-					const batch = writeBatch(db);
+					let batch = writeBatch(db);
+					let delegation = '';
+					let delFlag = false;
+					let timestamp = Date.now();
 					groupMembers.forEach((voter) => {
-						let delegation = '';
-						let delFlag = false;
-						voter.rules?.forEach((rule) => {
-							if (electionCategories.includes(rule.condition)) {
-								if ((rule.action === "delegate") && (!delFlag)) {
-									if (groupMembers.find(voter => voter.username === rule.delegation)) {
-										delegation = rule.delegation;
-										delFlag = true;
-									}
+						if (voter.rules !== undefined) {
+							delegation = '';
+							delFlag = false;
+							for (const rule of voter.rules) {
+								if ((electionCategories.includes(rule.condition)) && (rule.action === "delegate") && (!delFlag) && (groupMembers.find(voter => voter.username === rule.delegation))) {
+									delegation = rule.delegation;
+									delFlag = true;
 								}
 							}
-						});
-						const voterDoc = doc(voterRef, voter.username);
-						batch.set(voterDoc, {unique: voter.username, vote: 0, delegation: delegation, weight: 1});
+						}
+						//if (pubKey !== "") {
+						timestamp = Date.now();
+						batch.set(doc(voterRef, voter.username), { unique: voter.username, vote: 0, delegation: delegation, weight: 1, blockchain: false, pubKey: pubKey, time: timestamp });
+						//} else {
+						//await setDoc(doc(voterRef, voter.username), { unique: voter.username, vote: 0, delegation: delegation, weight: 1, blockchain: false });
+						//}
+						
 					});
+					
 					await batch.commit();
+					
+					// Deploy the contract
+					const accounts = await web3.eth.getAccounts();
+					const account = accounts[0];  // Use the first account
+					//const account = web3.eth.accounts.create(); // Create a new account to deploy the contract
+					const contract: any = new web3.eth.Contract(contractABI);
+					const deploy = contract.deploy({ data: bytecode, arguments: [electionUnique] });
+					
+					const contractInstance = await deploy.send({from: account, gas: web3.utils.toHex("800")});
+					
+					console.log('Contract deployed at address:', contractInstance.options.address);
+					await updateDoc(docRef, { address: contractInstance.options.address });
+					
 				} catch (error) {
 					console.log(error);
 					setErrorMsg("Error occurred creating voter profiles");
@@ -624,7 +916,7 @@ function App() {
 				setErrorMsg("Election Identifier already exists. Please try a different one");
 			}
 		}
-	}
+	};
 	
 	const handleGroupEdit = async (event: React.FormEvent) => {
 		event.preventDefault();
@@ -643,7 +935,7 @@ function App() {
 			const newCat = [...electionCategories, name];
 			setElectionCategories(newCat);
 		}
-	}
+	};
 	const selectElection = async (unique: string) => {
 		await clearErrors();
 		await setElectionScores(undefined);
@@ -675,11 +967,57 @@ function App() {
 	const selectVote = async (option: number) => {
 		setSelectedVote(option);
 	};
-	const calculateResult = async () => {
+	
+	const retrieveVotes = async () => {
+		let address = "";
+		let election = "";
+		let optionsLength = 0;
+		let group = "";
+		if (selectedElection) {
+			address = selectedElection.address;
+			election = selectedElection.unique;
+			optionsLength = selectedElection.options.length;
+		} else {
+			return;
+		}
+		if (selectedGroup) { group = selectedGroup.unique; }
+		const passphrase = `${group}&${electionTitle}`;
+		//const secID = `${group}-${election}`;
+		const contract = new web3.eth.Contract(contractABI, address);
+		try {
+			const accounts = await web3.eth.getAccounts();
+			const account = accounts[0]; // Using the first account for demonstration
+			// Call the getAllVotes method
+			const result: string[] = await contract.methods.getEncryptedVotes().call({ from: account });
+			const blockchainVoters: string[] = await contract.methods.getVoters().call({ from: account });
+			console.log(result);
+			console.log(blockchainVoters);
+			let priv;
+			calculateResults({ group: group, election: election, title: electionTitle, optionsLength: optionsLength, passphrase: passphrase, encrypted: result, voters: blockchainVoters })
+				.then((result) => {
+					console.log(result.data);
+					priv = result.data;
+				})
+				.catch((error) => {
+					console.log(`Error occurred decrypting votes or finding results`);
+				});
+			
+			
+			// Destructure the result into its components
+			//const [voterIds, encryptedVotes] = result;
+		} catch (error) {
+			console.error('An error occurred:', error);
+		}
+	};
+	
+	const localTotal = async () => {
 		await clearErrors();
 		if (selectedGroup && selectedElection) {
 			const electionDocRef = doc(collection(doc(groupsRef, selectedGroup.unique), 'elections'), selectedElection.unique);
 			const voterCollection = collection(electionDocRef, 'voters');
+			
+			//const data = { group: selectedGroup.unique, election: selectedElection.unique, optionsLength: selectedElection.options.length  };
+			
 			// 1. Initialize variables
 			const voters: any[] = [];
 			let voteCounts: number[] = Array(selectedElection.options.length).fill(0);
@@ -742,21 +1080,28 @@ function App() {
 	const handleVote = async () => {
 		await clearErrors();
 		if (selectedVote !== -1) {
+			if (secureVoting) {
+				const timestamp = Date.now();
+				setVoteData({ blockchain: true, delegation: "", unique: username, vote: selectedVote, weight: 1, pubKey: pubKey, time: timestamp });
+				setMessage(JSON.stringify({ blockchain: true, delegation: "", unique: username, vote: selectedVote, weight: 1, pubKey: pubKey, time: timestamp }));
+				moveToVoting();
+			}
 			if (selectedGroup && selectedElection) {
 				const electionDoc = doc(collection(doc(groupsRef, selectedGroup.unique), 'elections'), selectedElection.unique);
 				const voterDoc = doc(collection(electionDoc, 'voters'), username);
+				const timestamp = Date.now();
 				try {
-					await updateDoc(voterDoc, {delegation: "", vote: selectedVote});
+					await updateDoc(voterDoc, { delegation: "", unique: username, vote: selectedVote, weight: 1, blockchain: false, time: timestamp });
 				} catch (error) {
 					try {
-						await setDoc(voterDoc, { delegation: "", unique: username, vote: selectedVote, weight: 1 })
+						await setDoc(voterDoc, { delegation: "", unique: username, vote: selectedVote, weight: 1, blockchain: false, time: timestamp });
 					} catch (error) {
 						setErrorMsg("error occurred submitting vote");
 					}
 				}
 				//a vote is selected
 				//update election tally
-				await calculateResult();
+				//await localTotal();
 				setSelectedVote(-1);
 			}
 		} else {
@@ -768,27 +1113,34 @@ function App() {
 		await clearErrors();
 		if (selectedMember) {
 			//member selected from sidebar to delegate too
+			if (secureVoting) {
+				const timestamp = Date.now();
+				setVoteData({ blockchain: true, delegation: selectedMember, unique: username, vote: 0, weight: 1, pubKey: pubKey, time: timestamp });
+				setMessage(JSON.stringify({ blockchain: true, delegation: selectedMember, unique: username, vote: 0, weight: 1, pubKey: pubKey, time: timestamp }));
+				moveToVoting();
+			}
 			if (selectedGroup && selectedElection) {
 				const electionDoc = doc(collection(doc(groupsRef, selectedGroup.unique), 'elections'), selectedElection.unique);
 				const voterDoc = doc(collection(electionDoc, 'voters'), username);
+				const timestamp = Date.now();
 				try {
-					await updateDoc(voterDoc, {delegation: selectedMember, vote: 0});
+					await updateDoc(voterDoc, { delegation: selectedMember, unique: username, vote: 0, weight: 1, blockchain: false, time: timestamp });
 				} catch (error) {
 					try {
-						await setDoc(voterDoc, { delegation: selectedMember, unique: username, vote: 0, weight: 1 })
+						await setDoc(voterDoc, { delegation: selectedMember, unique: username, vote: 0, weight: 1, blockchain: false, time: timestamp });
 					} catch (error) {
 						setErrorMsg("error occurred submitting delegation");
 					}
 				}
 				//a vote is selected
 				//update election tally
-				await calculateResult();
+				//await localTotal();
 				setSelectedVote(-1);
 			}
 		} else {
 			setErrorMsg("To delegate your vote, select a group member from the member list on the right by clicking on them. The highlighted member can then be assigned your vote by using the Delegate Vote button");
 		}
-	}
+	};
 	const handleJoin = async () => {
 		if (selectedGroup) {
 			const unique = selectedGroup.unique;
@@ -804,36 +1156,8 @@ function App() {
 			moveToLoggedIn();
 			await getGroups();
 			await selectGroup(unique);
-			/*
-			const newUserData = {
-				username: username,
-				role: groupRole,
-				displayName: groupDisplayName,
-				hideID: groupHiding
-			};
-			let oldUserData = oldGroupData.members.find((member: MemberData) => member.username === username);
-			
-			if ((oldUserData) && ((oldUserData.hideID !== newUserData.hideID) || (oldUserData.displayName !== newUserData.displayName))) {
-				// Use Firestore's arrayUnion and arrayRemove to update the member on the server.
-				await updateDoc(groupRef, {
-					members: arrayRemove(oldUserData) // Remove the old data.
-				});
-				await updateDoc(groupRef, {
-					members: arrayUnion(newUserData) // Add the new data.
-				});
-				// Now update the local state.
-				// Find the index of the member in the array.
-				// could just get new group docSnap from Firestore
-				const localGroupRef = groups.find((group) => group.unique === selectedGroup.unique) || oldGroupData;
-				const memberIndex = localGroupRef.members?.findIndex((member: MemberData) => member.username === username);
-				
-				// Replace the old member data with the new one.
-				localGroupRef.members[memberIndex] = newUserData;
-				setGroupMembers(localGroupRef.members);
-			}
-			*/
 		}
-	}
+	};
 	const addRule = () => {
 		let delegate = "";
 		if (condition !== "") {
@@ -871,7 +1195,90 @@ function App() {
 			moveToLoggedIn();
 			await selectGroup(unique);
 		}
-	}
+	};
+	const saveSecurity = async () => {
+		if (selectedGroup) {
+			setSecureVoting(addingKey);
+			setAddingKey(false);
+			let unique = selectedGroup.unique;
+			const docRef = doc(collection(doc(groupsRef, selectedGroup.unique), 'members'), username);
+			if (addingKey) {
+				await updateDoc(docRef, {pubKey: pubKey});
+			} else {
+				await updateDoc(docRef, {pubKey: ""});
+			}
+			moveToLoggedIn();
+			await selectGroup(unique);
+		}
+	};
+	
+	const generatePGPKeys = async () => {
+		const { privateKey, publicKey, revocationCertificate} = await generateKey({
+			format: 'armored',
+			userIDs: [{ name: 'Steve radshaw', email: 'Billy_Turnip@Firebase.com' }],
+			curve: 'ed25519',
+			passphrase: passphrase
+		});
+		setNewPriv(privateKey);
+		setNewPub(publicKey);
+		setMadeKeys(true);
+	};
+
+	const blockchainVote = async () => {
+		try {
+			const accounts = await web3.eth.getAccounts();
+			const account = accounts[0];
+			let address = '0x91A0742186295507186B7D272d44ca38B30486BC';
+			if (selectedElection) {
+				address = selectedElection.address;
+			}
+			// Create a new Ethereum account (for testing)
+			//const account = web3.eth.accounts.create();
+			
+			// Initialize contract
+			const contract: any = new web3.eth.Contract(contractABI, address);
+			const hexed: string = web3.utils.toHex(username);
+			const data = contract.methods.vote(hexed, encrypted).encodeABI();
+			//await data.send({from: account, to: address, gas: web3.utils.toHex("800")})
+			
+			// Create transaction object
+			const tx: Transaction = { from: account, to: address, data: data, gas: web3.utils.toHex("800") };
+			await web3.eth.sendTransaction(tx);
+			console.log("Encrypted Vote Successfully stored with Election's Smart Contract at ", address);
+			
+			const ref = doc(collection(doc(collection(doc(groupsRef, selectedGroup?.unique), 'elections'), selectedElection?.unique), 'voters'), username);
+			const timestamp = Date.now();
+			await updateDoc(ref, { unique: username, blockchain: true, time: timestamp });
+			let unique = "";
+			if (selectedGroup) {
+				unique = selectedGroup.unique;
+			}
+			moveToLoggedIn();
+			await selectGroup(unique);
+		} catch (error) {
+			console.log(error);
+		}
+	};
+	const encryptVote = async () => {
+		if (newPub !== "") {
+			try {
+				const publicKey = await readKey({armoredKey: newPub});
+				const privateKey = await decryptKey({privateKey: await readPrivateKey({armoredKey: newPriv}), passphrase});
+				const encryptedMessage = await encrypt({
+					message: await createMessage({text: message}), // input as Message object
+					encryptionKeys: publicKey,
+					signingKeys: privateKey
+				});
+				console.log(encryptedMessage.toString());
+				setEncrypted(encryptedMessage.toString());
+				//await blockchainVote();
+			} catch (error) {
+				console.log(error);
+			}
+		} else {
+			console.log('election is missing their public key');
+		}
+	};
 	
 	// Display logic
 	let textColour = darkMode ? 'white' : 'black';
@@ -879,13 +1286,6 @@ function App() {
 	let boxBack = darkMode ? 'darkgrey' : 'lightgrey';
 	let border1 = darkMode ? '1px solid white' : '1px solid black';
 	
-	const cancel = async () => {
-		if (selectedGroup) {
-			const unique = selectedGroup.unique;
-			moveToLoggedIn();
-			await selectGroup(unique);
-		}
-	}
 	const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
 		setSelectedRole({ ...selectedRole, [event.target.name]: event.target.checked });
 	};
@@ -893,7 +1293,7 @@ function App() {
 		const roleArr = [...roles];
 		roleArr[roleIndex] = selectedRole;
 		setRoles(roleArr);
-	}
+	};
 	const saveRoles = async () => {
 		if (selectedGroup) {
 			const rolesRef = collection(doc(groupsRef, selectedGroup.unique), 'roles');
@@ -911,7 +1311,7 @@ function App() {
 			moveToEditGroup();
 			await selectGroup(selectedGroup.unique);
 		}
-	}
+	};
 	
 	//let border2 = darkMode ? 'white' : 'black';
 	if (loggedIn) {
@@ -938,14 +1338,13 @@ function App() {
 							</div>
 							<p style={{fontSize: '32px', padding: '10px', margin: '0px 150px', borderBottom: border1, textAlign: 'center'}}>Creating New Election</p>
 							<label style={{fontSize: '20px', textAlign: 'left', marginTop:'10px'}}>Unique Election ID: </label><input type="text" onChange={e => setElectionUnique(e.target.value)} placeholder="Unique Election Identifier" required style={{ boxSizing: 'border-box', padding: '15px', fontSize: '18px', borderColor: usernameError ? 'red' : 'black' }}/>
-							<label style={{fontSize: '20px', textAlign: 'left', marginTop:'10px'}}>Group Title: </label><input type="text" onChange={e => setElectionTitle(e.target.value)} placeholder="Election Title" required style={{ boxSizing: 'border-box', padding: '15px', fontSize: '18px', borderColor: displayNameError ? 'red' : 'black' }}/>
+							<label style={{fontSize: '20px', textAlign: 'left', marginTop:'10px'}}>Election Title: </label><input type="text" onChange={e => setElectionTitle(e.target.value)} placeholder="Election Title" required style={{ boxSizing: 'border-box', padding: '15px', fontSize: '18px', borderColor: displayNameError ? 'red' : 'black' }}/>
 							<span style={{fontSize: '20px', textAlign: 'left', marginTop:'10px'}}>Election Description: </span>
-							<textarea style={{ boxSizing: 'border-box', width: '100%', height: '300px', padding: '20px', overflowY: 'auto', borderColor: 'black', fontSize: '16px' }}
+							<textarea style={{ boxSizing: 'border-box', width: '100%', height: '250px', padding: '20px', overflowY: 'auto', borderColor: 'black', fontSize: '16px' }}
 									  placeholder="Description of the Election and provides voters with necessary context. Can also describe its use or importance and why it is being held."
 									  onChange={(e) => setElectionDescription(e.target.value)} />
-							<label style={{ fontSize: '20px', marginTop:'10px' }}> Stop new voters joining the election while it is underway:
-								<input type="checkbox" checked={electionPrivate} onChange={(e) => setElectionPrivate(e.target.checked)} />
-							</label>
+							<label style={{fontSize: '28px'}}>Election Deadline: <input type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)} style={{fontSize: '24px'}}/></label>
+							<span style={{fontSize: '16px', textAlign: 'center'}}>(All times shown are based off your current local time and do not adjust for other timezones)</span>
 							<button type="submit" style={{ padding: '10px', fontSize: '28px', margin: '20px 150px', boxSizing: 'border-box' }}>Create Election</button>
 							{errorMsg && <div style={{ color: 'red', textAlign: 'center', width: '70%' }}>{errorMsg}</div>}
 						</div>
@@ -1043,10 +1442,7 @@ function App() {
 							<span style={{fontSize: '16px', textAlign: 'left'}}>Group Description: </span>
 							<textarea style={{ boxSizing: 'border-box', width: '100%', height: '200px', padding: '15px', overflowY: 'auto', borderColor: 'black', fontSize: '16px' }}
 									  value={groupDescription}
-									  onChange={(e) => setGroupDescription(e.target.value)} />
-							<label style={{ fontSize: '16px' }}> Make the group private by requiring a valid invite code to join:
-								<input type="checkbox" checked={groupPrivate} onChange={(e) => setGroupPrivate(e.target.checked)} />
-							</label>
+									  onChange={(e) => setGroupDescription(e.target.value)} />npm
 							<p style={{fontSize: '20px'}}>Personal Group Details:</p>
 							<label style={{fontSize: '16px', textAlign: 'left'}}>Personal Displayed Name: </label><input type="text" value={groupDisplayName} onChange={e => setGroupDisplayName(e.target.value)} placeholder="Your Display Name" required style={{ boxSizing: 'border-box', padding: '15px', fontSize: '18px', borderColor: displayNameError ? 'red' : 'black' }}/>
 							<label style={{ fontSize: '16px' }}> Hide your unique ID from group members:
@@ -1092,9 +1488,6 @@ function App() {
 							<textarea style={{ boxSizing: 'border-box', width: '100%', height: '200px', padding: '15px', overflowY: 'auto', borderColor: 'black', fontSize: '16px' }}
 									  placeholder="Description of the group and what it is about. This can help members and other users to understand what it will be used for and how things operate in the group."
 									  onChange={(e) => setGroupDescription(e.target.value)} />
-							<label style={{ fontSize: '16px' }}> Make the group private by requiring a valid invite code to join:
-								<input type="checkbox" checked={groupPrivate} onChange={(e) => setGroupPrivate(e.target.checked)} />
-							</label>
 							<p style={{fontSize: '20px'}}>Personal Group Details:</p>
 							<label style={{fontSize: '16px', textAlign: 'left'}}>Personal Displayed Name: </label><input type="text" onChange={e => setGroupDisplayName(e.target.value)} placeholder="Your Display Name" required style={{ boxSizing: 'border-box', padding: '15px', fontSize: '18px', borderColor: displayNameError ? 'red' : 'black' }}/>
 							<label style={{ fontSize: '16px' }}> Hide your unique ID from group members:
@@ -1209,7 +1602,7 @@ function App() {
 								textAlign: 'center'
 							}}>Finding Groups</p>
 							<p style={{paddingTop: '20px'}}></p>
-							{/*
+							
 							<div style={{paddingTop: '10px', margin: '10px'}}>
 								<span style={{fontSize: '32px'}}>Search for groups: </span><input type="text" style={{
 								fontSize: '32px',
@@ -1311,12 +1704,18 @@ function App() {
 		} else if (isRules) {
 			if (categories.length === 0) {
 				return (
-					<div className="App" style={{ display: 'flex', margin: '0px', padding: '0px', height: '100vh', backgroundColor: background, color: textColour }}>
+					<div className="App" style={{display: 'flex', margin: '0px', padding: '0px', height: '100vh', backgroundColor: background, color: textColour}}>
 						<div style={{display: 'flex', justifyContent: 'space-between', margin: '10px'}}>
-							<button type="button" onClick={() => moveToLoggedIn()} style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Go Back</button>
-							<button type="button" onClick={() => setDarkMode(!darkMode)} style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Toggle Dark Mode</button>
+							<button type="button" onClick={() => moveToLoggedIn()}
+									style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Go Back
+							</button>
+							<button type="button" onClick={() => setDarkMode(!darkMode)}
+									style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Toggle Dark
+								Mode
+							</button>
 						</div>
-						<p style={{ fontSize: '40px', textAlign: 'center' }}>This group has no categories for elections, categories are needed to be able to use delegation rules in a group!</p>
+						<p style={{fontSize: '40px', textAlign: 'center'}}>This group has no categories for elections,
+							categories are needed to be able to use delegation rules in a group!</p>
 					</div>
 				);
 			} else {
@@ -1328,10 +1727,10 @@ function App() {
 									<button type="button" onClick={() => cancelRules()} style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Cancel</button>
 									<button type="button" onClick={() => setDarkMode(!darkMode)} style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Toggle Dark Mode</button>
 								</div>
-								<p style={{ fontSize: '40px', textAlign: 'center' }}>You have no delegation rules in place yet, create one to get started!</p>
+								<p style={{fontSize: '40px', textAlign: 'center'}}>You have no delegation rules in place yet, create one to get started!</p>
 							</div>
 						) : (
-							<div style={{display: 'flex', flex: 1, flexDirection: 'column', maxHeight: '100vh', padding: '20px 5px', overflow: 'auto', borderRight: border1, boxSizing: 'border-box' }}>
+							<div style={{display: 'flex', flex: 1, flexDirection: 'column', maxHeight: '100vh', padding: '20px 5px', overflow: 'auto', borderRight: border1, boxSizing: 'border-box'}}>
 								<div style={{display: 'flex', justifyContent: 'space-between', margin: '10px 50px'}}>
 									<button type="button" onClick={() => cancelRules()} style={{padding: '5px 5px', fontSize: '20px', boxSizing: 'border-box'}}>Cancel</button>
 									<button type="button" onClick={() => setDarkMode(!darkMode)} style={{padding: '5px 5px', fontSize: '20px', boxSizing: 'border-box'}}>Toggle Dark Mode</button>
@@ -1340,19 +1739,18 @@ function App() {
 								<DndProvider backend={HTML5Backend}>
 									<RuleList rules={rules} setRules={setRules} selectMember={setSelectedMember}/>
 								</DndProvider>
-								<span style={{ textAlign: 'center', fontSize: '16px' }}>tip: hover over a delegate rule to see the member the rule applies to.</span>
+								<span style={{textAlign: 'center', fontSize: '16px'}}>tip: hover over a delegate rule to see the member the rule applies to.</span>
 								<button type="button" onClick={() => saveRules()} style={{padding: '10px 10px', fontSize: '24px', margin: '20px 200px', boxSizing: 'border-box'}}>Save Changes</button>
 							</div>
 						)}
 						{/* border */}
 						<div style={{display: 'flex', flex: 2, flexDirection: 'row', height: '100%', padding: '0px 10px', margin: '0px 10px'}}>
 							<div style={{display: 'flex', flex: 3, flexDirection: 'column', height: '100%', padding: '0px 10px'}}>
-								<p style={{fontSize: '40px', borderBottom: '1px solid grey', paddingBottom: '20px', margin: '30px 200px' }}>Create New Rule</p>
+								<p style={{fontSize: '40px', borderBottom: '1px solid grey', paddingBottom: '20px', margin: '30px 200px'}}>Create New Rule</p>
 								{errorMsg && <div style={{color: 'red', textAlign: 'center', width: '100%'}}>{errorMsg}</div>}
 								
-								<label style={{ fontSize: '24px', margin: '20px' }}>
-									Condition:
-									<select style={{ fontSize: '20px', margin: '20px' }} onChange={(e) => setCondition(e.target.value)} value={condition}>
+								<label style={{fontSize: '24px', margin: '20px'}}>Condition:
+									<select style={{fontSize: '20px', margin: '20px'}} onChange={(e) => setCondition(e.target.value)} value={condition}>
 										<option value="" disabled>Select a category</option>
 										{categories.map((cat) => (
 											<option key={cat} value={cat}>
@@ -1361,15 +1759,13 @@ function App() {
 										))}
 									</select>
 								</label>
-								<label style={{ fontSize: '24px', margin: '20px' }}>
-									Action:
-									<select style={{ fontSize: '20px', margin: '20px' }} onChange={(e) => setAction(e.target.value as 'delegate' | 'abstain')}
-											value={action}>
+								<label style={{fontSize: '24px', margin: '20px'}}>Action:
+									<select style={{fontSize: '20px', margin: '20px'}} onChange={(e) => setAction(e.target.value as 'delegate' | 'abstain')} value={action}>
 										<option value="delegate">delegate</option>
 										<option value="abstain">abstain</option>
 									</select>
 								</label>
-								<button style={{ fontSize: '24px', margin: '20px 250px', padding: '10px 10px' }} onClick={addRule}>Create Rule</button>
+								<button style={{fontSize: '24px', margin: '20px 250px', padding: '10px 10px'}} onClick={addRule}>Create Rule</button>
 							</div>
 							{/* right sidebar */}
 							<div style={{display: 'flex', flex: 1, flexDirection: 'column', maxHeight: '100vh', overflow: 'auto', padding: '20px 0px', borderLeft: border1, boxSizing: 'border-box'}}>
@@ -1380,22 +1776,15 @@ function App() {
 											{selectedMember === member.username ? (
 												<div key={member.username} onClick={() => selectMember(member.username)}
 													 style={{display: 'flex', flexDirection: 'column', margin: '10px', padding: '10px', textAlign: 'left', border: '1px solid grey', backgroundColor: boxBack}}>
-													<span
-														style={{fontSize: '20px', textAlign: 'left'}}>{member.displayName}</span>
-													<span
-														style={{fontSize: '12px'}}>{member.hideID ? '' : '@' + member.username}</span>
-													<span
-														style={{fontSize: '16px', fontStyle: 'italic'}}>{member.role}</span>
+													<span style={{fontSize: '20px', textAlign: 'left'}}>{member.displayName}</span>
+													<span style={{fontSize: '12px'}}>{member.hideID ? '' : '@' + member.username}</span>
+													<span style={{fontSize: '16px', fontStyle: 'italic'}}>{member.role}</span>
 												</div>
 											) : (
 												<div key={member.username} onClick={() => selectMember(member.username)}
 													 style={{display: 'flex', flexDirection: 'column', margin: '10px', padding: '10px', textAlign: 'left', border: '1px solid grey', backgroundColor: background}}>
-													<span
-														style={{fontSize: '20px', textAlign: 'left'}}>{member.displayName}</span>
-													<span
-														style={{fontSize: '12px'}}>{member.hideID ? '' : '@' + member.username}</span>
-													<span
-														style={{fontSize: '16px', fontStyle: 'italic'}}>{member.role}</span>
+													<span style={{fontSize: '20px', textAlign: 'left'}}>{member.displayName}</span><span style={{fontSize: '12px'}}>{member.hideID ? '' : '@' + member.username}</span>
+													<span style={{fontSize: '16px', fontStyle: 'italic'}}>{member.role}</span>
 												</div>
 											)}
 										</div>
@@ -1406,6 +1795,99 @@ function App() {
 					</div>
 				);
 			}
+		} else if (isSecurity) {
+			return (
+				<div className="App" style={{ display: 'flex', height: '100vh', width: '100%', backgroundColor: background, color: textColour }}>
+					<div style={{ display: 'flex', flexDirection: 'row', width: '100%' }}>
+						<div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: '10px', padding: '50px', boxSizing: 'border-box', borderRight: '1px solid grey' }}>
+							<div style={{ display: 'flex', justifyContent: 'space-between' }}>
+								<button type="button" onClick={() => cancel()} style={{ fontSize: '16px', width: '80px' }}>Cancel</button>
+								<button type="button" onClick={() => setDarkMode(!darkMode)} style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Toggle Dark Mode</button>
+							</div>
+							<p style={{fontSize: '32px', padding: '10px', margin: '0px 150px', borderBottom: border1, textAlign: 'center'}}>Voting Security Options</p>
+							<p style={{ fontSize: '24px' }}> Enhance security of your voting decisions with PGP keys and Blockchain:
+								<input type="checkbox" checked={addingKey} onChange={(e) => setAddingKey(e.target.checked)} />
+							</p>
+							{addingKey && (
+								<div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '0px', margin: '10px 100px', boxSizing: 'border-box'}}>
+									<span style={{fontSize: '20px', textAlign: 'left'}}>Input Public PGP Key: </span>
+									<textarea style={{ boxSizing: 'border-box', width: '100%', height: '400px', padding: '10px', overflowY: 'auto', borderColor: 'black', fontSize: '16px', textAlign: 'center' }}
+											  value={pubKey}
+											  onChange={(e) => setPubKey(e.target.value)} />
+									<span style={{fontSize: '16px', textAlign: 'center'}}>Please note that these choices only affect this current group.</span>
+								</div>
+							)}
+							<button type="button" onClick={() => saveSecurity()} style={{ padding: '10px', fontSize: '28px', margin: '10px 200px', boxSizing: 'border-box' }}>Save Voting Security Changes</button>
+							{errorMsg && <div style={{ color: 'red', textAlign: 'center', width: '70%' }}>{errorMsg}</div>}
+						</div>
+						{addingKey ? (
+							<div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', padding: '50px', boxSizing: 'border-box' }}>
+								<p style={{fontSize: '32px', textAlign: 'center', padding: '10px', margin: '0px 150px' }}>Create PGP Keys</p>
+								{!madeKeys ? (
+									<div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '0px', margin: '10px 0px', boxSizing: 'border-box'}}>
+										<label style={{fontSize: '20px', textAlign: 'left'}}>Private Key Protective Passphrase: </label><input type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="Key Passphrase" required style={{ boxSizing: 'border-box', padding: '15px', fontSize: '20px', borderColor: passwordError ? 'red' : 'black' }}/>
+										{passphrase.length > 1 && <div><button type="button" onClick={() => generatePGPKeys()} style={{ fontSize: '24px', margin:'10px 200px', padding: '10px' }}>Generate New PGP Key Pair</button></div>}
+										<p style={{fontSize: '24px', textAlign: 'center' }}>Explain Security Enhancements and how it affects the user</p>
+									</div>
+								) : (
+									<div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '0px 100px', margin: '10px 0px', boxSizing: 'border-box'}}>
+										<label style={{fontSize: '20px', textAlign: 'left'}}>Your Public Key: </label>
+										<textarea readOnly value={newPub} style={{ boxSizing: 'border-box', width: '100%', height: '320px', padding: '10px', overflowY: 'auto', borderColor: 'black', fontSize: '16px', textAlign: 'center' }} />
+										<label style={{fontSize: '20px', textAlign: 'left'}}>Your Private Key: </label>
+										<textarea readOnly value={newPriv} style={{ boxSizing: 'border-box', width: '100%', height: '370px', padding: '10px', overflowY: 'auto', borderColor: 'black', fontSize: '16px', textAlign: 'center' }} />
+									</div>
+								)}
+							</div>
+						) : (
+							<div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', padding: '50px', boxSizing: 'border-box' }}>
+								<p style={{fontSize: '32px', textAlign: 'center' }}>Create New PGP Keys</p>
+								<p style={{fontSize: '24px', textAlign: 'center' }}>Explain Security Enhancements and how it affects the user</p>
+							</div>
+						)}
+					</div>
+				</div>
+			);
+		} else if (isVoting) {
+			return (
+				<div className="App" style={{ display: 'flex', height: '100vh', width: '100%', backgroundColor: background, color: textColour }}>
+					<div style={{ display: 'flex', flexDirection: 'row', width: '100%' }}>
+						<div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: '10px', padding: '50px', boxSizing: 'border-box', borderRight: '1px solid grey' }}>
+							<div style={{ display: 'flex', justifyContent: 'space-between' }}>
+								<button type="button" onClick={() => cancel()} style={{ fontSize: '16px', width: '80px' }}>Cancel</button>
+								<p style={{fontSize: '36px', padding: '5px 80px', margin: '0px 0px', borderBottom: border1, textAlign: 'center'}}>Independent Vote Encryption</p>
+								<button type="button" onClick={() => setDarkMode(!darkMode)} style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Toggle Dark Mode</button>
+							</div>
+							<div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '0px', margin: '10px 100px', boxSizing: 'border-box'}}>
+								<label style={{fontSize: '18px', textAlign: 'left'}}>Election Public Key: </label>
+								<textarea readOnly value={newPub} style={{ boxSizing: 'border-box', width: '100%', height: '220px', padding: '10px', overflowY: 'auto', borderColor: 'black', fontSize: '14px', textAlign: 'center' }} />
+								<label style={{fontSize: '18px', textAlign: 'left'}}>Unencrypted Voting Submission: </label>
+								<input readOnly value={message} style={{ boxSizing: 'border-box', width: '100%', padding: '8px', borderColor: 'black', fontSize: '16px', textAlign: 'center' }}/>
+							</div>
+							<div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '0px', margin: '0px 50px', boxSizing: 'border-box'}}>
+								<label style={{fontSize: '20px', textAlign: 'left'}}>Input Manually Signed and Encrypted Vote: </label>
+								<textarea style={{ boxSizing: 'border-box', width: '100%', height: '300px', padding: '10px', overflowY: 'auto', borderColor: 'black', fontSize: '16px', margin: '0px 0px', textAlign: 'center' }}
+										  value={encrypted}
+										  onChange={(e) => setEncrypted(e.target.value)} />
+								{encrypted.length > 0 && <div><button type="button" onClick={() => blockchainVote()} style={{ padding: '10px', fontSize: '28px', margin: '10px 200px', boxSizing: 'border-box' }}>Submit Encrypted Vote</button></div>}
+								{errorMsg && <div style={{ color: 'red', textAlign: 'center', width: '70%' }}>{errorMsg}</div>}
+							</div>
+						</div>
+						<div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', padding: '50px', boxSizing: 'border-box' }}>
+							<p style={{fontSize: '32px', textAlign: 'center', padding: '10px', margin: '0px 150px' }}>Automatic Encryption and Submission</p>
+							<div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '0px', margin: '10px 0px', boxSizing: 'border-box'}}>
+								<div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '0px', margin: '10px 100px', boxSizing: 'border-box'}}>
+									<span style={{fontSize: '20px', textAlign: 'left'}}>Input Private Key: </span>
+									<textarea style={{ boxSizing: 'border-box', width: '100%', height: '400px', padding: '10px', overflowY: 'auto', borderColor: 'black', fontSize: '16px', textAlign: 'center' }}
+											  value={newPriv}
+											  onChange={(e) => setNewPriv(e.target.value)} />
+								</div>
+								<label style={{fontSize: '20px', textAlign: 'left'}}>Private Key Passphrase: </label><input type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="Key Passphrase" required style={{ boxSizing: 'border-box', padding: '15px', fontSize: '20px', borderColor: passwordError ? 'red' : 'black' }}/>
+								{((passphrase.length > 0) && (newPriv.length > 0)) && <div><button type="button" onClick={() => encryptVote()} style={{ fontSize: '24px', margin:'10px 200px', padding: '10px' }}>Encrypt and Submit Vote</button></div>}
+							</div>
+						</div>
+					</div>
+				</div>
+			);
 		} else {
 			return (
 				<div className="App" style={{ display: 'flex', margin: '0px', padding: '0px', height: '100vh', width: '100%', backgroundColor: background, color: textColour }}>
@@ -1455,68 +1937,128 @@ function App() {
 										<p style={{fontSize: '20px', alignSelf: 'center'}}>There are no live elections in this group.<br></br> If you have the permissions to create elections,
 											you can use the Create Election button to get started in this group and allow the other members to vote on your proposal!</p>
 									) : (
-										<ul>
-											{elections.map((election) => (
-												<div key={election.unique}>
-													{selectedElection?.unique === election.unique ? (
-														<div style={{display: 'flex', flexDirection: 'column', margin: '10px', padding: '10px 10px', borderTop: '1px solid grey', borderBottom: '1px solid grey', backgroundColor: boxBack }}>
-															<span style={{fontSize: '28px' }}>{election.name}</span>
-															<span style={{ fontSize: '20px' }}>@{election.unique}</span>
-															<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', alignSelf: 'center' }}>
-																{election.category.map((name) => (
-																	<div style={{ border: border1, padding: '5px', margin: '5px' }}>
-																		<span style={{ fontSize: '20px' }}>{name}</span>
+										<div>
+											<ul>
+												{elections.map((election) => (
+													<div key={election.unique}>
+														{!(election.ended) && (
+															<div>
+																{selectedElection?.unique === election.unique ? (
+																	<div style={{display: 'flex', flexDirection: 'column', margin: '10px', padding: '10px 10px', borderTop: '1px solid grey', borderBottom: '1px solid grey', backgroundColor: boxBack }}>
+																		<span style={{fontSize: '28px' }}>{election.name}</span>
+																		<span style={{ fontSize: '20px' }}>@{election.unique}</span>
+																		<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', alignSelf: 'center' }}>
+																			{election.category.map((name) => (
+																				<div key={name} style={{ border: border1, padding: '5px', margin: '5px' }}>
+																					<span style={{ fontSize: '20px' }}>{name}</span>
+																				</div>
+																			))}
+																		</div>
+																		<p style={{fontSize: '20px'}}>{election.description}</p>
+																		<span style={{ fontSize: '20px' }}>Voting Options:</span>
+																		<div style={{ display: 'flex', flexDirection: 'column', maxHeight: '300px', overflow: 'auto', padding: '10px', margin: '0px 200px' }}>
+																			{selectedElection.options.map((option, index) => (
+																				<div>
+																					{selectedVote === index ? (
+																						<div style={{ padding: '10px', fontSize: '20px', borderBottom: '1px solid grey', backgroundColor: background }}>
+																							{electionScores ? (
+																								<span>{option}  :  {electionScores[index]}%</span>
+																							) : (
+																								<span>{option}</span>
+																							)}
+																						</div>
+																					) : (
+																						<div onClick={() => selectVote(index)} style={{ padding: '10px', fontSize: '20px', borderBottom: '1px solid grey', backgroundColor: boxBack }}>
+																							{electionScores ? (
+																								<span>{option}  :  {electionScores[index]}%</span>
+																							) : (
+																								<span>{option}</span>
+																							)}
+																						</div>
+																					)}
+																				</div>
+																			))}
+																		</div>
+																		<div style={{ display: 'flex', justifyContent: 'space-evenly', margin: '10px' }}>
+																			<button type="button" onClick={() => retrieveVotes()} style={{padding: '5px 5px', fontSize: '18px', boxSizing: 'border-box'}}>Calculate Result</button>
+																			<button type="button" onClick={() => handleVote()} style={{padding: '5px 5px', fontSize: '18px', boxSizing: 'border-box'}}>Submit Vote</button>
+																			<button type="button" onClick={() => handleDelegation()} style={{padding: '5px 5px', fontSize: '18px', boxSizing: 'border-box'}}>Delegate Vote</button>
+																		</div>
+																		{errorMsg && <div style={{ color: 'red', textAlign: 'center', width: '100%' }}>{errorMsg}</div>}
 																	</div>
-																))}
-															</div>
-															<p style={{fontSize: '20px'}}>{election.description}</p>
-															<span style={{ fontSize: '20px' }}>Voting Options:</span>
-															<div style={{ display: 'flex', flexDirection: 'column', maxHeight: '300px', overflow: 'auto', padding: '10px', margin: '0px 200px' }}>
-																{selectedElection.options.map((option, index) => (
-																	<div>
-																		{selectedVote === index ? (
-																			<div style={{ padding: '10px', fontSize: '20px', borderBottom: '1px solid grey', backgroundColor: background }}>
-																				{electionScores ? (
-																					<span>{option}  :  {electionScores[index]}%</span>
-																				) : (
-																					<span>{option}</span>
-																				)}
-																			</div>
-																		) : (
-																			<div onClick={() => selectVote(index)} style={{ padding: '10px', fontSize: '20px', borderBottom: '1px solid grey', backgroundColor: boxBack }}>
-																				{electionScores ? (
-																					<span>{option}  :  {electionScores[index]}%</span>
-																				) : (
-																					<span>{option}</span>
-																				)}
-																			</div>
-																		)}
+																) : (
+																	<div onClick={() => selectElection(election.unique)} style={{display: 'flex', flexDirection: 'column', margin: '10px', padding: '10px 10px', borderTop: '1px solid grey', borderBottom: '1px solid grey' }}>
+																		<span style={{fontSize: '28px' }}>{election.name}</span>
+																		<span style={{ fontSize: '20px' }}>@{election.unique}</span>
+																		<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', alignSelf: 'center' }}>
+																			{election.category.map((name) => (
+																				<div style={{ fontSize: '16px', border: border1, padding: '5px', margin: '5px' }}>
+																					<span style={{ fontSize: '16px' }}>{name}</span>
+																				</div>
+																			))}
+																		</div>
 																	</div>
-																))}
+																)}
 															</div>
-															<div style={{ display: 'flex', justifyContent: 'space-evenly', margin: '10px' }}>
-																<button type="button" onClick={() => calculateResult()} style={{padding: '5px 5px', fontSize: '18px', boxSizing: 'border-box'}}>Calculate Result</button>
-																<button type="button" onClick={() => handleVote()} style={{padding: '5px 5px', fontSize: '18px', boxSizing: 'border-box'}}>Submit Vote</button>
-																<button type="button" onClick={() => handleDelegation()} style={{padding: '5px 5px', fontSize: '18px', boxSizing: 'border-box'}}>Delegate Vote</button>
-															</div>
-															{errorMsg && <div style={{ color: 'red', textAlign: 'center', width: '100%' }}>{errorMsg}</div>}
-														</div>
-													) : (
-														<div onClick={() => selectElection(election.unique)} style={{display: 'flex', flexDirection: 'column', margin: '10px', padding: '10px 10px', borderTop: '1px solid grey', borderBottom: '1px solid grey' }}>
-															<span style={{fontSize: '28px' }}>{election.name}</span>
-															<span style={{ fontSize: '20px' }}>@{election.unique}</span>
-															<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', alignSelf: 'center' }}>
-																{election.category.map((name) => (
-																	<div style={{ fontSize: '16px', border: border1, padding: '5px', margin: '5px' }}>
-																		<span style={{ fontSize: '16px' }}>{name}</span>
+														)}
+													</div>
+												))}
+											</ul>
+											<p style={{fontSize: '28px', textAlign: 'left', marginLeft: '100px' }}>Finished Elections:</p>
+											<ul>
+												{elections.map((election) => (
+													<div key={election.unique}>
+														{(election.ended) && (
+															<div>
+																{selectedElection?.unique === election.unique ? (
+																	<div style={{display: 'flex', flexDirection: 'column', margin: '10px', padding: '10px 10px', borderTop: '1px solid grey', borderBottom: '1px solid grey', backgroundColor: boxBack }}>
+																		<span style={{fontSize: '28px' }}>{election.name}</span>
+																		<span style={{ fontSize: '20px' }}>@{election.unique}</span>
+																		<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', alignSelf: 'center' }}>
+																			{election.category.map((name) => (
+																				<div key={name} style={{ border: border1, padding: '5px', margin: '5px' }}>
+																					<span style={{ fontSize: '20px' }}>{name}</span>
+																				</div>
+																			))}
+																		</div>
+																		<p style={{fontSize: '20px'}}>{election.description}</p>
+																		<span style={{ fontSize: '20px' }}>Voting Results:</span>
+																		<div style={{ display: 'flex', flexDirection: 'column', maxHeight: '300px', overflow: 'auto', padding: '10px', margin: '0px 200px' }}>
+																			{selectedElection.options.map((option, index) => (
+																				<div key={index}>
+																					{electionScores ? (
+																						<div style={{ padding: '10px', fontSize: '20px', borderBottom: '1px solid grey', backgroundColor: background }}>
+																							<span>{option}  :  {electionScores[index]}%</span>
+																						</div>
+																					) : (
+																						<div style={{ padding: '10px', fontSize: '20px', borderBottom: '1px solid grey', backgroundColor: background }}>
+																							<span>{option}</span>
+																						</div>
+																					)}
+																				</div>
+																			))}
+																		</div>
+																		{errorMsg && <div style={{ color: 'red', textAlign: 'center', width: '100%' }}>{errorMsg}</div>}
 																	</div>
-																))}
+																) : (
+																	<div onClick={() => selectElection(election.unique)} style={{display: 'flex', flexDirection: 'column', margin: '10px', padding: '10px 10px', borderTop: '1px solid grey', borderBottom: '1px solid grey' }}>
+																		<span style={{fontSize: '28px' }}>{election.name}</span>
+																		<span style={{ fontSize: '20px' }}>@{election.unique}</span>
+																		<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', alignSelf: 'center' }}>
+																			{election.category.map((name) => (
+																				<div key={name} style={{ fontSize: '16px', border: border1, padding: '5px', margin: '5px' }}>
+																					<span style={{ fontSize: '16px' }}>{name}</span>
+																				</div>
+																			))}
+																		</div>
+																	</div>
+																)}
 															</div>
-														</div>
-													)}
-												</div>
-											))}
-										</ul>
+														)}
+													</div>
+												))}
+											</ul>
+										</div>
 									)}
 								</div>
 							</div>
@@ -1549,6 +2091,7 @@ function App() {
 								</div>
 								<button type="button" onClick={() => moveToEditGroup()} style={{padding: '10px 10px', fontSize: '20px', margin: '10px 40px', boxSizing: 'border-box'}}>Edit Group</button>
 								<button type="button" onClick={() => moveToRules()} style={{padding: '10px 10px', fontSize: '20px', margin: '10px 40px', boxSizing: 'border-box'}}>Delegation Rules</button>
+								<button type="button" onClick={() => moveToSecurity()} style={{padding: '10px 10px', fontSize: '20px', margin: '10px 40px', boxSizing: 'border-box'}}>Voting Security</button>
 								<span style={{ fontSize: '20px', textAlign: 'center'}}>Member List: </span>
 								<div style={{ maxHeight: '100%', overflow: 'auto' }}>
 									<ul>
