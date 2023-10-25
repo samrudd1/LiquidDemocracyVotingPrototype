@@ -54,3 +54,17 @@ exports.generateElectionKeys = functions.https.onCall(async (data, context) => {
     }
     return { success: true };
 });
+
+//package.json:
+/*
+{
+  "name": "generateElectionKeys",
+  "dependencies": {
+    "@google-cloud/secret-manager": "^5.0.0",
+    "@types/node": "^16.18.38",
+    "firebase-admin": "^11.10.1",
+    "firebase-functions": "^4.4.1",
+    "openpgp": "^5.10.1"
+  }
+}
+*/
