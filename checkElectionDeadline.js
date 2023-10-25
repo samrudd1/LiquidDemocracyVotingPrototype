@@ -22,3 +22,15 @@ exports.checkElectionDeadline = functions.pubsub.schedule('every 5 minutes').onR
     await Promise.all(updatePromises);
     return null;
 });
+
+//package.json:
+/*
+{
+  "name": "checkElectionDeadline",
+  "dependencies": {
+    "@types/node": "^16.18.38",
+    "firebase-admin": "^11.10.1",
+    "firebase-functions": "^4.4.1"
+  }
+}
+*/
