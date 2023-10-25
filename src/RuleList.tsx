@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import RuleComponent from './RuleComponent';
 
 type DelegationRule = { unique: string, condition: string, action: string, delegation: string };

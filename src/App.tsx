@@ -15,19 +15,20 @@ type GroupData = { unique: string, name: string, description: string, founder: s
 type RoleData = { name: string, canBan: boolean, canDemote: boolean, canPromote: boolean, canKick: boolean, canEditGroup: boolean, canEditRoles: boolean, createElections: boolean };
 type UserData = { name: string, groups: Array<string>, hash: string, salt: string, iterations: number };
 type ElectionData = { unique: string, name: string, description: string, creator: string, category: string[], deadline: Date, ended: boolean, options: string[], counts: number[], percentages: number[], pubKey: string, address: string };
-type VoterData = { unique: string, vote: number, delegation: string, weight: number, blockchain: boolean, pubKey?: string, time: number };
 type DelegationRule = { unique: string, condition: string, action: string, delegation: string };
 type MemberData = { username: string, displayName: string, role: string, hideID: boolean, rules?: DelegationRule[], pubKey?: string };
+type resultsData = {success: boolean, percentages: number[] };
 
-
+//default role placeholders
 const defaultFounder: RoleData = { name: 'founder', canEditGroup: true, canEditRoles: true, canKick: true,
 	canBan: true, createElections: true, canPromote: true, canDemote: true };
-const defaultAdmin:RoleData = { name: 'admin', canEditGroup: false, canEditRoles: false, canKick: true,
+const defaultAdmin: RoleData = { name: 'admin', canEditGroup: false, canEditRoles: false, canKick: true,
 	canBan: true, createElections: true, canPromote: false, canDemote: false };
-const defaultMember:RoleData = { name: 'member', canEditGroup: false, canEditRoles: false, canKick: false,
+const defaultMember: RoleData = { name: 'member', canEditGroup: false, canEditRoles: false, canKick: false,
 	canBan: false, createElections: false, canPromote: false, canDemote: false };
 
 function App() {
+	
 	//variables related to the user
 	const [username, setUsername] = useState("");
 	const [displayName, setDisplayName] = useState("");
@@ -35,6 +36,7 @@ function App() {
 	const [confirmPassword, setConfirmPassword] = useState("");
 	const [darkMode, setDarkMode] = useState(false);
 	
+	//variables related to the groups
 	const [elections, setElections] = useState<ElectionData[]>([]);
 	const [groupIDs, setGroupIDs] = useState<GroupPreview[]>([]);
 	const [groupUnique, setGroupUnique] = useState("");
@@ -48,48 +50,47 @@ function App() {
 	const [tempDisplayName, setTempDisplayName] = useState("");
 	const [groupHiding, setGroupHiding] = useState(false);
 	const [roles, setRoles] = useState<RoleData[]>([]);
+	const [expDesc, setExpDesc] = useState(false); //toggles the expansion of the Group description when flipped
 	
+	//variables for selected elements
 	const [selectedRole, setSelectedRole] = useState<RoleData>(defaultMember);
 	const [roleIndex, setRoleIndex] = useState(0);
 	const [selectedMember, setSelectedMember] = useState("");
 	const [selectedGroup, setSelectedGroup] = useState<GroupData>();
 	const [selectedElection, setSelectedElection] = useState<ElectionData>();
 	const [selectedVote, setSelectedVote] = useState(-1);
-	const [isGroupSelected, setIsGroupSelected] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [matchingGroups, setMatchingGroups] = useState<GroupData[]>([]);
-	const [groupFound, setGroupFound] = useState<GroupData[]>([]);
 	
+	//election variables
 	const [electionUnique, setElectionUnique] = useState("");
 	const [electionTitle, setElectionTitle] = useState("");
 	const [electionDescription, setElectionDescription] = useState("");
-	const [electionPrivate, setElectionPrivate] = useState(false);
-	const [electionMembers, setElectionMembers] = useState<VoterData[]>([]);
 	const [electionScores, setElectionScores] = useState<number[]>();
 	const [electionCategories, setElectionCategories] = useState<string[]>([]);
 	const [options, setOptions] = useState(['']);
 	const [deadline, setDeadline] = useState("");
 	
+	//delegation rule variables
 	const [rules, setRules] = useState<Array<DelegationRule>>([]);
 	const [categories, setCategories] = useState<string[]>([]);
 	const [condition, setCondition] = useState<string>('');
 	const [action, setAction] = useState<'delegate' | 'abstain'>('abstain');
 	
-	const [expDesc, setExpDesc] = useState(false); //toggles the expansion of the Group description when flipped
-	
+	//variables to highlight which page to display
 	const [isSignUp, setIsSignUp] = useState(false);
 	const [loggedIn, setLoggedIn] = useState(false);
 	const [isCreating, setIsCreating] = useState(false);
 	const [isFinding, setIsFinding] = useState(false);
 	const [isEditing, setIsEditing] = useState(false);
 	const [isPermissions, setIsPermissions] = useState(false);
-	const [isJoining, setIsJoining] = useState(false);
 	const [isElections, setIsElections] = useState(false);
 	const [editingDisplay, setEditingDisplay] = useState(false);
 	const [isRules, setIsRules] = useState(false);
 	const [isSecurity, setIsSecurity] = useState(false);
 	const [isVoting, setIsVoting] = useState(false);
 	
+	//variables for pgp keys and encryption process
 	const [addingKey, setAddingKey] = useState(false);
 	const [pubKey, setPubKey] = useState("");
 	const [secureVoting, setSecureVoting] = useState(false);
@@ -97,17 +98,20 @@ function App() {
 	const [newPub, setNewPub] = useState("");
 	const [newPriv, setNewPriv] = useState("");
 	const [madeKeys, setMadeKeys] = useState(false);
-	const [voteData, setVoteData] = useState<VoterData>();
 	const [message, setMessage] = useState("");
 	const [encrypted, setEncrypted] = useState("");
 	
+	//error variables
 	const [errorMsg, setErrorMsg] = useState("");
 	const [usernameError, setUsernameError] = useState(false);
 	const [displayNameError, setDisplayNameError] = useState(false);
 	const [passwordError, setPasswordError] = useState(false);
 	const [confirmPasswordError, setConfirmPasswordError] = useState(false);
 	
-	const web3 = new Web3(new Web3.providers.HttpProvider('http://localhost:8545'));  //new Web3('https://9bd6-146-70-70-227.ngrok.io');
+	//connects to local ethereum instance through port 8545
+	const web3 = new Web3(new Web3.providers.HttpProvider('http://localhost:8545'));
+	
+	//ABI  and bytecode of the smart contract that handles votes for elections
 	const contractABI = [
 		{
 			"inputs": [
@@ -268,10 +272,13 @@ function App() {
 	];
 	const bytecode = '0x60806040523480156200001157600080fd5b506040516200168038038062001680833981810160405281019062000037919062000179565b80600390805190602001906200004f92919062000057565b5050620002ef565b82805462000065906200025b565b90600052602060002090601f016020900481019282620000895760008555620000d5565b82601f10620000a457805160ff1916838001178555620000d5565b82800160010185558215620000d5579182015b82811115620000d4578251825591602001919060010190620000b7565b5b509050620000e49190620000e8565b5090565b5b8082111562000103576000816000905550600101620000e9565b5090565b60006200011e6200011884620001f2565b620001be565b9050828152602081018484840111156200013757600080fd5b6200014484828562000225565b509392505050565b600082601f8301126200015e57600080fd5b81516200017084826020860162000107565b91505092915050565b6000602082840312156200018c57600080fd5b600082015167ffffffffffffffff811115620001a757600080fd5b620001b5848285016200014c565b91505092915050565b6000604051905081810181811067ffffffffffffffff82111715620001e857620001e7620002c0565b5b8060405250919050565b600067ffffffffffffffff82111562000210576200020f620002c0565b5b601f19601f8301169050602081019050919050565b60005b838110156200024557808201518184015260208101905062000228565b8381111562000255576000848401525b50505050565b600060028204905060018216806200027457607f821691505b602082108114156200028b576200028a62000291565b5b50919050565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052602260045260246000fd5b7f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b61138180620002ff6000396000f3fe608060405234801561001057600080fd5b50600436106100885760003560e01c80639a6efcc01161005b5780639a6efcc014610127578063cdd7225314610145578063da58c7d914610163578063dfed58dd1461019357610088565b806301c3a6ca1461008d5780632072cdd1146100a957806371f1a3d1146100d957806385e8e7a714610109575b600080fd5b6100a760048036038101906100a29190610cb8565b6101c3565b005b6100c360048036038101906100be9190610c77565b6102e6565b6040516100d09190611045565b60405180910390f35b6100f360048036038101906100ee9190610c77565b61039c565b6040516101009190611001565b60405180910390f35b610111610493565b60405161011e9190611045565b60405180910390f35b61012f610521565b60405161013c9190611001565b60405180910390f35b61014d610788565b60405161015a9190610fdf565b60405180910390f35b61017d60048036038101906101789190610d78565b610861565b60405161018a9190611023565b60405180910390f35b6101ad60048036038101906101a89190610d24565b61090d565b6040516101ba9190611045565b60405180910390f35b600080836040516101d49190610fc8565b908152602001604051809103902080546101ed9061121b565b905014610272576001826040516102049190610fc8565b90815260200160405180910390206000836040516102229190610fc8565b9081526020016040518091039020908060018154018082558091505060019003906000526020600020016000909190919091509080546102619061121b565b61026c9291906109dc565b506102af565b6002829080600181540180825580915050600190039060005260206000200160009091909190915090805190602001906102ad929190610a69565b505b806000836040516102c09190610fc8565b908152602001604051809103902090805190602001906102e1929190610aef565b505050565b600081805160208101820180518482526020830160208501208183528095505050505050600091509050805461031b9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546103479061121b565b80156103945780601f1061036957610100808354040283529160200191610394565b820191906000526020600020905b81548152906001019060200180831161037757829003601f168201915b505050505081565b60606001826040516103ae9190610fc8565b9081526020016040518091039020805480602002602001604051908101604052809291908181526020016000905b828210156104885783829060005260206000200180546103fb9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546104279061121b565b80156104745780601f1061044957610100808354040283529160200191610474565b820191906000526020600020905b81548152906001019060200180831161045757829003601f168201915b5050505050815260200190600101906103dc565b505050509050919050565b600380546104a09061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546104cc9061121b565b80156105195780601f106104ee57610100808354040283529160200191610519565b820191906000526020600020905b8154815290600101906020018083116104fc57829003601f168201915b505050505081565b6060600060028054905067ffffffffffffffff81111561056a577f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b60405190808252806020026020018201604052801561059d57816020015b60608152602001906001900390816105885790505b50905060005b600280549050811015610780576000600282815481106105ec577f4e487b7100000000000000000000000000000000000000000000000000000000600052603260045260246000fd5b9060005260206000200180546106019061121b565b80601f016020809104026020016040519081016040528092919081815260200182805461062d9061121b565b801561067a5780601f1061064f5761010080835404028352916020019161067a565b820191906000526020600020905b81548152906001019060200180831161065d57829003601f168201915b505050505090506000816040516106919190610fc8565b908152602001604051809103902080546106aa9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546106d69061121b565b80156107235780601f106106f857610100808354040283529160200191610723565b820191906000526020600020905b81548152906001019060200180831161070657829003601f168201915b5050505050838381518110610761577f4e487b7100000000000000000000000000000000000000000000000000000000600052603260045260246000fd5b60200260200101819052505080806107789061124d565b9150506105a3565b508091505090565b60606002805480602002602001604051908101604052809291908181526020016000905b828210156108585783829060005260206000200180546107cb9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546107f79061121b565b80156108445780601f1061081957610100808354040283529160200191610844565b820191906000526020600020905b81548152906001019060200180831161082757829003601f168201915b5050505050815260200190600101906107ac565b50505050905090565b6002818154811061087157600080fd5b90600052602060002001600091509050805461088c9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546108b89061121b565b80156109055780601f106108da57610100808354040283529160200191610905565b820191906000526020600020905b8154815290600101906020018083116108e857829003601f168201915b505050505081565b600182805160208101820180518482526020830160208501208183528095505050505050818154811061093f57600080fd5b9060005260206000200160009150915050805461095b9061121b565b80601f01602080910402602001604051908101604052809291908181526020018280546109879061121b565b80156109d45780601f106109a9576101008083540402835291602001916109d4565b820191906000526020600020905b8154815290600101906020018083116109b757829003601f168201915b505050505081565b8280546109e89061121b565b90600052602060002090601f016020900481019282610a0a5760008555610a58565b82601f10610a1b5780548555610a58565b82800160010185558215610a5857600052602060002091601f016020900482015b82811115610a57578254825591600101919060010190610a3c565b5b509050610a659190610b75565b5090565b828054610a759061121b565b90600052602060002090601f016020900481019282610a975760008555610ade565b82601f10610ab057805160ff1916838001178555610ade565b82800160010185558215610ade579182015b82811115610add578251825591602001919060010190610ac2565b5b509050610aeb9190610b75565b5090565b828054610afb9061121b565b90600052602060002090601f016020900481019282610b1d5760008555610b64565b82601f10610b3657805160ff1916838001178555610b64565b82800160010185558215610b64579182015b82811115610b63578251825591602001919060010190610b48565b5b509050610b719190610b75565b5090565b5b80821115610b8e576000816000905550600101610b76565b5090565b6000610ba5610ba084611098565b611067565b905082815260208101848484011115610bbd57600080fd5b610bc88482856111d9565b509392505050565b6000610be3610bde846110c8565b611067565b905082815260208101848484011115610bfb57600080fd5b610c068482856111d9565b509392505050565b600082601f830112610c1f57600080fd5b8135610c2f848260208601610b92565b91505092915050565b600082601f830112610c4957600080fd5b8135610c59848260208601610bd0565b91505092915050565b600081359050610c7181611334565b92915050565b600060208284031215610c8957600080fd5b600082013567ffffffffffffffff811115610ca357600080fd5b610caf84828501610c0e565b91505092915050565b60008060408385031215610ccb57600080fd5b600083013567ffffffffffffffff811115610ce557600080fd5b610cf185828601610c0e565b925050602083013567ffffffffffffffff811115610d0e57600080fd5b610d1a85828601610c38565b9150509250929050565b60008060408385031215610d3757600080fd5b600083013567ffffffffffffffff811115610d5157600080fd5b610d5d85828601610c0e565b9250506020610d6e85828601610c62565b9150509250929050565b600060208284031215610d8a57600080fd5b6000610d9884828501610c62565b91505092915050565b6000610dad8383610eb3565b905092915050565b6000610dc18383610f56565b905092915050565b6000610dd482611118565b610dde818561115e565b935083602082028501610df0856110f8565b8060005b85811015610e2c5784840389528151610e0d8582610da1565b9450610e1883611144565b925060208a01995050600181019050610df4565b50829750879550505050505092915050565b6000610e4982611123565b610e53818561116f565b935083602082028501610e6585611108565b8060005b85811015610ea15784840389528151610e828582610db5565b9450610e8d83611151565b925060208a01995050600181019050610e69565b50829750879550505050505092915050565b6000610ebe8261112e565b610ec88185611180565b9350610ed88185602086016111e8565b610ee181611323565b840191505092915050565b6000610ef78261112e565b610f018185611191565b9350610f118185602086016111e8565b610f1a81611323565b840191505092915050565b6000610f308261112e565b610f3a81856111a2565b9350610f4a8185602086016111e8565b80840191505092915050565b6000610f6182611139565b610f6b81856111ad565b9350610f7b8185602086016111e8565b610f8481611323565b840191505092915050565b6000610f9a82611139565b610fa481856111be565b9350610fb48185602086016111e8565b610fbd81611323565b840191505092915050565b6000610fd48284610f25565b915081905092915050565b60006020820190508181036000830152610ff98184610dc9565b905092915050565b6000602082019050818103600083015261101b8184610e3e565b905092915050565b6000602082019050818103600083015261103d8184610eec565b905092915050565b6000602082019050818103600083015261105f8184610f8f565b905092915050565b6000604051905081810181811067ffffffffffffffff8211171561108e5761108d6112f4565b5b8060405250919050565b600067ffffffffffffffff8211156110b3576110b26112f4565b5b601f19601f8301169050602081019050919050565b600067ffffffffffffffff8211156110e3576110e26112f4565b5b601f19601f8301169050602081019050919050565b6000819050602082019050919050565b6000819050602082019050919050565b600081519050919050565b600081519050919050565b600081519050919050565b600081519050919050565b6000602082019050919050565b6000602082019050919050565b600082825260208201905092915050565b600082825260208201905092915050565b600082825260208201905092915050565b600082825260208201905092915050565b600081905092915050565b600082825260208201905092915050565b600082825260208201905092915050565b6000819050919050565b82818337600083830152505050565b60005b838110156112065780820151818401526020810190506111eb565b83811115611215576000848401525b50505050565b6000600282049050600182168061123357607f821691505b60208210811415611247576112466112c5565b5b50919050565b6000611258826111cf565b91507fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff82141561128b5761128a611296565b5b600182019050919050565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052601160045260246000fd5b7f4e487b7100000000000000000000000000000000000000000000000000000000600052602260045260246000fd5b7f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b6000601f19601f8301169050919050565b61133d816111cf565b811461134857600080fd5b5056fea2646970667358221220529c5bd972113a460dbcc8093e82ce200ac383c826c301115c3e05cb17b9d46b64736f6c63430008000033';
 	
+	//firebase references
 	const usersRef = collection(db, "users");
 	const groupsRef = collection(db, "groups");
+	
 	const fetchingGroups: GroupData[] = [];
 	
+	//clears variables, used when moving to some new pages
 	const clearUserFields = () => {
 		setUsername("");
 		setDisplayName("");
@@ -288,6 +295,7 @@ function App() {
 		setSelectedRole(defaultMember);
 		setRoles([]);
 	};
+	//resets the error variables
 	const clearErrors = () => {
 		setErrorMsg("");
 		setUsernameError(false);
@@ -295,20 +303,8 @@ function App() {
 		setPasswordError(false);
 		setConfirmPasswordError(false);
 	};
-	/*
-	const hashInput = (input: string, salt: string) => {
-	  const iterations: number = 10000;
-	  let hash: string = input;
-	  for (let i = 0; i < iterations; i++) {
-		const sha512 = crypto.createHash('sha512');
-		sha512.update(hash + salt);
-		hash = sha512.digest('hex');
-	  }
-	  //console.log(hash);
-	  return hash;
-	};
-	*/
 	
+	//the moveTo functions are called when a new page is being switched to
 	const moveToSignUp = () => {
 		setIsSignUp(true);
 		setLoggedIn(false);
@@ -415,7 +411,6 @@ function App() {
 		setElectionUnique("");
 		setElectionTitle("");
 		setElectionDescription("");
-		setElectionPrivate(false);
 		setOptions([""]);
 		setLoggedIn(true);
 		setIsElections(true);
@@ -476,24 +471,32 @@ function App() {
 		setIsVoting(true);
 	};
 	
+	//this can be called whenever the user wishes to exit their current page
+	//if they have previously selected a group then it will return to that groups page, otherwise it will return to the welcome page
 	const cancel = async () => {
 		if (selectedGroup) {
 			const unique = selectedGroup.unique;
 			moveToLoggedIn();
 			await selectGroup(unique);
+		} else {
+			moveToLoggedIn();
 		}
 	};
+	
 	//snapshot listener for group finding search
 	const fetchGroups =  async (search: string) => {
 		try {
 			const fetchedGroups: GroupData[] = [];
 			const groupsRef = collection(db, "groups");
+			
+			//creates a query for the firebase database
 			const q = query(
 				groupsRef,
 				where("name", ">=", searchQuery),
 				where("name", "<", searchQuery + "\uf8ff"),
 				where("isPrivate", "==", false)
 			);
+			//gets all documents that match the query, then adds them to the fetchedGroups array
 			const querySnapshot = await getDocs(q);
 			querySnapshot.forEach((doc) => {
 				fetchedGroups.push(doc.data() as GroupData);
@@ -504,38 +507,40 @@ function App() {
 		}
 		setSearchQuery(search);
 	};
-	//updates user's groups they are apart of
+	
+	//updates user's groups they are a member of
+	//this only retrieves the unique ID and display name of each group so that it can be displayed in a list
 	const getGroups = async () => {
 		try {
+			//gets user details
 			const snap = await getDoc(doc(usersRef, username));
 			if (!(snap.exists())) {
 				setUsernameError(true);
 				setErrorMsg("User account not found");
 				return;
 			} else {
+				//gets the list of groups they are apart of
 				const grArray = snap.data().groups;
 				let arr: Array<GroupPreview> = [];
+				//for each id in the list of groups, the data for each group is retrieved and stored in the groupIDs array
 				for (const id of grArray) {
-					//if (!(id in groupIDs)) {
-						let docRef = doc(db, 'groups', id);
-						let docSnap = await getDoc(docRef);
-						if (docSnap.exists()) {
-							//let data: GroupData = docSnap.data() as GroupData;
-							arr.push({unique: docSnap.data().unique, name: docSnap.data().name});
-						} else {
-							setErrorMsg(`${id} group data is missing`);
-						}
-					//}
+					let docRef = doc(db, 'groups', id);
+					let docSnap = await getDoc(docRef);
+					if (docSnap.exists()) {
+						//let data: GroupData = docSnap.data() as GroupData;
+						arr.push({unique: docSnap.data().unique, name: docSnap.data().name});
+					} else {
+						setErrorMsg(`${id} group data is missing`);
+					}
 				}
 				setGroupIDs(arr);
-				//const groupsRef = collection(db, "groups");
+				
 				const q = query(groupsRef)
 				const querySnapshot = await getDocs(q);
 				querySnapshot.forEach((doc) => {
 					fetchingGroups.push(doc.data() as GroupData);
 				});
 				setMatchingGroups(fetchingGroups);
-				setGroupFound(fetchingGroups);
 				setDisplayName(snap.data().name);
 			}
 		} catch (error) {
@@ -543,16 +548,18 @@ function App() {
 		}
 	}
 	
+	//this can be called when a user clicks on the group in the group list sidebar on the left, or when returning from a different page
+	//this retrieves current group data from the database and updates all relevant group variables
 	const selectGroup = async (unique: string) => {
-		const data = await getDoc(doc(groupsRef, unique));
+		const data = await getDoc(doc(groupsRef, unique)); //group data
 		const memRef = collection(doc(groupsRef, unique), 'members');
-		const memDoc = await getDoc(doc(memRef, username));
-		const count = await getCountFromServer(memRef);
+		const memDoc = await getDoc(doc(memRef, username)); //current user's data in the group
+		const count = await getCountFromServer(memRef); //gets the number of members
 		const electionRef = collection(doc(groupsRef, unique), 'elections');
 		const rolesRef = collection(doc(groupsRef, unique), 'roles');
-		if (data.exists()) {
+		
+		if (data.exists()) { //makes sure the group exists in database
 			setSelectedGroup(data.data() as GroupData);
-			//if (selectedGroup) {
 			let user = memDoc.data() as MemberData;
 			let userRole: string;
 			let name: string;
@@ -611,7 +618,6 @@ function App() {
 			setGroupRole(userRole);
 			setRules(rules);
 			setMemberCount(count.data().count);
-			setIsGroupSelected(true);
 			setSelectedVote(-1);
 			setSelectedElection(undefined);
 			setElectionScores(undefined);
@@ -622,31 +628,17 @@ function App() {
 		}
 	};
 	
+	//selects group member
 	const selectMember = (unique: string) => {
 		setSelectedMember(unique);
 	};
+	//selects a role to edit
 	const selectRole = (role: RoleData, index: number) => {
 		setSelectedRole(role);
 		setRoleIndex(index);
 	};
 	
-	/*
-	//snapshot listener
-	useEffect(() => {
-		if(selectedGroup) {
-			const groupRef = doc(db, 'groups', selectedGroup.unique);
-			// This sets up the real-time listener.
-			const unsubscribe = onSnapshot(groupRef, (snapshot) => {
-				const updatedData = snapshot.data() as GroupData;
-				selectGroup(updatedData); // Update local state with latest data.
-			});
-			// This makes sure we unsubscribe from the listener when the component unmounts.
-			return unsubscribe;
-		}
-	}, [selectGroup, selectedGroup]);
-	 */
-	
-	
+	//encrypts the users password with SHA512 algorithm
 	const hashPassword = (input: string) => {
 		const salt: string = crypto.randomBytes(128).toString('base64');
 		const iterations: number = 10000;
@@ -662,7 +654,7 @@ function App() {
 			iterations: iterations
 		};
 	};
-	//checks to ensure that password and confirm password are different before hashing
+	//checks to ensure that password and confirm password are the same before hashing
 	const checkPassword = (input: string, salt: string, iterations: number, saved: string ) => {
 		let hash = input;
 		for (let i = 0; i < iterations; i++) {
@@ -673,51 +665,23 @@ function App() {
 		return (hash === saved);
 	};
 	
+	//updates user's group details
 	const handleDisplayUpdate = async () => {
 		if (selectedGroup) {
 			const unique = selectedGroup.unique;
 			const groupRef = doc(groupsRef, selectedGroup.unique);
 			const memRef = collection(groupRef, 'members');
 			const docRef = doc(memRef, username);
-			//const groupSnap = await getDoc(groupRef);
-			//const oldGroupData = groupSnap.data() as GroupData;
 			
 			await updateDoc(docRef, { displayName: tempDisplayName, hideID: groupHiding });
 			setGroupDisplayName(tempDisplayName);
 			setEditingDisplay(false);
 			moveToLoggedIn();
 			await selectGroup(unique);
-			/*
-			const newUserData = {
-				username: username,
-				role: groupRole,
-				displayName: groupDisplayName,
-				hideID: groupHiding
-			};
-			let oldUserData = oldGroupData.members.find((member: MemberData) => member.username === username);
-			
-			if ((oldUserData) && ((oldUserData.hideID !== newUserData.hideID) || (oldUserData.displayName !== newUserData.displayName))) {
-				// Use Firestore's arrayUnion and arrayRemove to update the member on the server.
-				await updateDoc(groupRef, {
-					members: arrayRemove(oldUserData) // Remove the old data.
-				});
-				await updateDoc(groupRef, {
-					members: arrayUnion(newUserData) // Add the new data.
-				});
-				// Now update the local state.
-				// Find the index of the member in the array.
-				// could just get new group docSnap from Firestore
-				const localGroupRef = groups.find((group) => group.unique === selectedGroup.unique) || oldGroupData;
-				const memberIndex = localGroupRef.members?.findIndex((member: MemberData) => member.username === username);
-				
-				// Replace the old member data with the new one.
-				localGroupRef.members[memberIndex] = newUserData;
-				setGroupMembers(localGroupRef.members);
-			}
-			*/
 		}
 	}
 	
+	//creates a new user account
 	const handleSignUp = async (event: React.FormEvent) => {
 		event.preventDefault();
 		await clearErrors();
@@ -740,6 +704,7 @@ function App() {
 		}
 	};
 	
+	//logs in the user
 	const handleSignIn = async (event: React.FormEvent) => {
 		event.preventDefault();
 		await clearErrors();
@@ -753,9 +718,6 @@ function App() {
 				return;
 			} else {
 				if (!checkPassword(password, data.salt, data.iterations, data.hash)) {
-					//const salt = userSnap.data()?.salt;
-					//const hashed = hashInput('pass', salt);
-					//await updateDoc(doc(collection(db, "users"), username), { hash: hashed });
 					setPasswordError(true);
 					setErrorMsg("Invalid Password");
 					return;
@@ -772,6 +734,7 @@ function App() {
 		}
 	};
 	
+	//creates a new group with the details provided by the user
 	const handleGroupCreate = async (event: React.FormEvent) => {
 		event.preventDefault();
 		await clearErrors();
@@ -783,16 +746,16 @@ function App() {
 			const rolesRef = collection(groupRef, 'roles');
 			const memRef = collection(groupRef, 'members');
 			const userRef = doc(usersRef, username);
-			//const electionsRef = collection(groupRef, 'elections'); //check creation at the start of election creation
+
 			await selectGroup(data.unique);
 			await setDoc(doc(rolesRef, 'founder'), defaultFounder);
 			await setDoc(doc(rolesRef, 'admin'), defaultAdmin);
 			await setDoc(doc(rolesRef, 'member'), defaultMember);
 			await setDoc(doc(memRef, username), { username: username, displayName: displayName, role: 'founder', hideID: false });
 			await updateDoc(userRef, { groups: arrayUnion(groupUnique) });
+			
 			setRoles([defaultMember, defaultAdmin, defaultFounder]);
 			groupIDs.push({ unique: groupUnique, name: groupDisplayName });
-			//groups.push(data);
 			setGroupRole('founder');
 			moveToLoggedIn();
 			await selectGroup(data.unique);
@@ -816,7 +779,8 @@ function App() {
 		newOptions.splice(index, 1);
 		setOptions(newOptions);
 	};
-	//for election options
+	
+	//for election categories
 	const handleCategoryChange = (event: React.ChangeEvent<HTMLInputElement>, index: number) => {
 		const newCategories = [...categories];
 		newCategories[index] = event.target.value;
@@ -830,6 +794,8 @@ function App() {
 		newCategories.splice(index, 1);
 		setCategories(newCategories);
 	};
+	
+	//creates a new election in the group with the provided details
 	const handleElectionCreate = async (event: React.FormEvent) => {
 		event.preventDefault();
 		clearErrors();
@@ -859,12 +825,15 @@ function App() {
 				};
 				await setDoc(docRef, data);
 				
+				//creates PGP keys for the election
+				//public key is made available to group members for vote encryption
+				//private key is stored securely with Google Secret Manager, only accessible by cloud function and kept hidden until election is finished
 				generateElectionKeys({secID: secID, title: electionTitle, group: unique, election: electionUnique})
 					.then((result) => {
 						console.log(result.data);
 					})
-					.catch((error) => {
-						console.log(`Error occurred making election keys`);
+					.catch(error => {
+						console.error(`Error occurred making election keys:`, error);
 					});
 				
 				try {
@@ -883,21 +852,15 @@ function App() {
 								}
 							}
 						}
-						//if (pubKey !== "") {
 						timestamp = Date.now();
 						batch.set(doc(voterRef, voter.username), { unique: voter.username, vote: 0, delegation: delegation, weight: 1, blockchain: false, pubKey: pubKey, time: timestamp });
-						//} else {
-						//await setDoc(doc(voterRef, voter.username), { unique: voter.username, vote: 0, delegation: delegation, weight: 1, blockchain: false });
-						//}
-						
 					});
 					
 					await batch.commit();
 					
-					// Deploy the contract
+					// Deploy the election's smart contract to local ethereum instance
 					const accounts = await web3.eth.getAccounts();
 					const account = accounts[0];  // Use the first account
-					//const account = web3.eth.accounts.create(); // Create a new account to deploy the contract
 					const contract: any = new web3.eth.Contract(contractABI);
 					const deploy = contract.deploy({ data: bytecode, arguments: [electionUnique] });
 					
@@ -918,6 +881,7 @@ function App() {
 		}
 	};
 	
+	//updates group settings
 	const handleGroupEdit = async (event: React.FormEvent) => {
 		event.preventDefault();
 		await clearErrors();
@@ -926,6 +890,7 @@ function App() {
 		await cancel();
 	};
 	
+	//adds or removes categories from an election
 	const toggleCategory = async (name: string) => {
 		const existingCategory = electionCategories.find(cat => cat === name);
 		if (existingCategory) {
@@ -936,6 +901,8 @@ function App() {
 			setElectionCategories(newCat);
 		}
 	};
+	
+	//selects and opens an election within the group
 	const selectElection = async (unique: string) => {
 		await clearErrors();
 		await setElectionScores(undefined);
@@ -951,6 +918,11 @@ function App() {
 			const data = await getDoc(electionDoc);
 			if (data.exists()) {
 				setSelectedElection(data.data() as ElectionData);
+				console.log(data.data());
+				const elecData = data.data() as ElectionData;
+				if (elecData.ended) {
+					setElectionScores(elecData.percentages);
+				}
 			}
 			const voter = await getDoc(voterDoc);
 			if (voter.exists()) {
@@ -964,10 +936,13 @@ function App() {
 			}
 		}
 	};
+	
+	//selects a voting option
 	const selectVote = async (option: number) => {
 		setSelectedVote(option);
 	};
 	
+	//retrieves votes from the election's smart contract
 	const retrieveVotes = async () => {
 		let address = "";
 		let election = "";
@@ -982,107 +957,38 @@ function App() {
 		}
 		if (selectedGroup) { group = selectedGroup.unique; }
 		const passphrase = `${group}&${electionTitle}`;
-		//const secID = `${group}-${election}`;
 		const contract = new web3.eth.Contract(contractABI, address);
+		
 		try {
 			const accounts = await web3.eth.getAccounts();
-			const account = accounts[0]; // Using the first account for demonstration
-			// Call the getAllVotes method
-			const result: string[] = await contract.methods.getEncryptedVotes().call({ from: account });
-			const blockchainVoters: string[] = await contract.methods.getVoters().call({ from: account });
+			const account = accounts[0]; //uses first account
+			const result: string[] = await contract.methods.getEncryptedVotes().call({ from: account }); //calls smart contract method to get all most recent encrypted votes
+			const blockchainVoters: string[] = await contract.methods.getVoters().call({ from: account }); //calls smart contract method to get a list of each voter that used the smart contract
 			console.log(result);
 			console.log(blockchainVoters);
-			let priv;
+
+			//calls a cloud function that can access the election's private key to decrypt votes and calculate election results
+			//the cloud function will update the results in the database automatically
 			calculateResults({ group: group, election: election, title: electionTitle, optionsLength: optionsLength, passphrase: passphrase, encrypted: result, voters: blockchainVoters })
 				.then((result) => {
-					console.log(result.data);
-					priv = result.data;
+					console.log(result.data); //logs for testing purposes
+					const data = result.data as resultsData;
+					setElectionScores(data.percentages);
 				})
 				.catch((error) => {
-					console.log(`Error occurred decrypting votes or finding results`);
+					console.error(`Error occurred decrypting votes or finding results:`, error);
 				});
-			
-			
-			// Destructure the result into its components
-			//const [voterIds, encryptedVotes] = result;
 		} catch (error) {
 			console.error('An error occurred:', error);
 		}
 	};
 	
-	const localTotal = async () => {
-		await clearErrors();
-		if (selectedGroup && selectedElection) {
-			const electionDocRef = doc(collection(doc(groupsRef, selectedGroup.unique), 'elections'), selectedElection.unique);
-			const voterCollection = collection(electionDocRef, 'voters');
-			
-			//const data = { group: selectedGroup.unique, election: selectedElection.unique, optionsLength: selectedElection.options.length  };
-			
-			// 1. Initialize variables
-			const voters: any[] = [];
-			let voteCounts: number[] = Array(selectedElection.options.length).fill(0);
-			// 2. Retrieve all voter data from Firestore
-			const voterSnapshot = await getDocs(voterCollection);
-			voterSnapshot.forEach((doc) => {
-				let voter = doc.data();
-				voter.weight = 1; // setting initial weight
-				voter.delegated = new Set<string>(); // Initialize the set of voters who delegated to this voter
-				voters.push(voter);
-			});
-			// 3. Resolve Delegations
-			// Identify cycles and update the delegations as needed
-			voters.forEach(voter => {
-				const visited = new Set<string>();
-				let currentVoter = voter;
-				while (currentVoter.delegation !== "") {
-					if (visited.has(currentVoter.unique)) {
-						currentVoter.delegation = ""; // Break the cycle
-						currentVoter.vote = 0; // Set vote to 0
-						break;
-					}
-					visited.add(currentVoter.unique);
-					currentVoter = voters.find(v => v.unique === currentVoter.delegation) || currentVoter;
-				}
-			});
-			// Process delegation chains, allowing for merging
-			voters.forEach((voter) => {
-				let currentVoter = voter;
-				while (currentVoter.delegation !== "") {
-					currentVoter = voters.find((v) => v.unique === currentVoter.delegation) || currentVoter;
-					currentVoter.delegated.add(voter.unique);
-					currentVoter.delegated = new Set([...currentVoter.delegated, ...voter.delegated]);
-				}
-			});
-			// 4. Calculate the vote tally based on weights
-			let totalWeight = 0;
-			voters.forEach(voter => {
-				voter.weight = voter.delegated.size + 1; // Set the weight as the size of the set plus 1
-				let delegateString = Array.from(voter.delegated).join (", ");
-				console.log(`Voter: ${voter.unique}, weight: ${voter.weight}, vote: ${voter.vote}, delegation: ${voter.delegation}, delegates: ${delegateString}`);
-				if ((voter.delegation === "") && (voter.vote < voteCounts.length)) {
-					voteCounts[voter.vote] += voter.weight;
-					totalWeight += voter.weight;
-				}
-			});
-			// Check that totalWeight matches voters.length
-			if (totalWeight !== voters.length) {
-				console.error(`Error in calculating weights, calc: ${totalWeight}, total: ${voters.length}`);
-			}
-			// 5. Calculate the percentage vote for each option and update
-			const percentageVotes = voteCounts.map((count) => {
-				const percentage = (count / totalWeight) * 100;
-				return Number(percentage.toFixed(1)); // round to one decimal place
-			});
-			await updateDoc(electionDocRef, { counts: voteCounts, percentages: percentageVotes });
-			setElectionScores(percentageVotes);
-		}
-	};
+	//processes the user's voting option and updates the election data
 	const handleVote = async () => {
 		await clearErrors();
 		if (selectedVote !== -1) {
 			if (secureVoting) {
 				const timestamp = Date.now();
-				setVoteData({ blockchain: true, delegation: "", unique: username, vote: selectedVote, weight: 1, pubKey: pubKey, time: timestamp });
 				setMessage(JSON.stringify({ blockchain: true, delegation: "", unique: username, vote: selectedVote, weight: 1, pubKey: pubKey, time: timestamp }));
 				moveToVoting();
 			}
@@ -1099,23 +1005,20 @@ function App() {
 						setErrorMsg("error occurred submitting vote");
 					}
 				}
-				//a vote is selected
-				//update election tally
-				//await localTotal();
 				setSelectedVote(-1);
 			}
 		} else {
-			//no vote selected
 			setErrorMsg("no vote option is selected");
 		}
 	};
+	
+	//processes the user's wish to delegate their vote to another group member
 	const handleDelegation = async () => {
 		await clearErrors();
 		if (selectedMember) {
 			//member selected from sidebar to delegate too
 			if (secureVoting) {
 				const timestamp = Date.now();
-				setVoteData({ blockchain: true, delegation: selectedMember, unique: username, vote: 0, weight: 1, pubKey: pubKey, time: timestamp });
 				setMessage(JSON.stringify({ blockchain: true, delegation: selectedMember, unique: username, vote: 0, weight: 1, pubKey: pubKey, time: timestamp }));
 				moveToVoting();
 			}
@@ -1132,15 +1035,14 @@ function App() {
 						setErrorMsg("error occurred submitting delegation");
 					}
 				}
-				//a vote is selected
-				//update election tally
-				//await localTotal();
 				setSelectedVote(-1);
 			}
 		} else {
 			setErrorMsg("To delegate your vote, select a group member from the member list on the right by clicking on them. The highlighted member can then be assigned your vote by using the Delegate Vote button");
 		}
 	};
+	
+	//deals with the user joining a new group, updating the relevant details in the database
 	const handleJoin = async () => {
 		if (selectedGroup) {
 			const unique = selectedGroup.unique;
@@ -1148,8 +1050,6 @@ function App() {
 			const memRef = collection(groupRef, 'members');
 			const docRef = doc(memRef, username);
 			const userRef = doc(usersRef, username);
-			//const groupSnap = await getDoc(groupRef);
-			//const oldGroupData = groupSnap.data() as GroupData;
 			
 			await setDoc(docRef, { username: username, displayName: tempDisplayName, role: 'member', hideID: groupHiding, rules: [] });
 			await updateDoc(userRef, { groups: arrayUnion(selectedGroup.unique) });
@@ -1158,6 +1058,8 @@ function App() {
 			await selectGroup(unique);
 		}
 	};
+	
+	//allows the user to create a new delegation rule for themselves in the group
 	const addRule = () => {
 		let delegate = "";
 		if (condition !== "") {
@@ -1180,13 +1082,8 @@ function App() {
 			setErrorMsg("please choose a valid category condition")
 		}
 	};
-	const cancelRules = async () => {
-		if (selectedGroup) {
-			let unique = selectedGroup.unique;
-			moveToLoggedIn();
-			await selectGroup(unique);
-		}
-	};
+
+	//saves the delegation rules and their order, updates the database
 	const saveRules = async () => {
 		if (selectedGroup) {
 			let unique = selectedGroup.unique;
@@ -1196,6 +1093,8 @@ function App() {
 			await selectGroup(unique);
 		}
 	};
+	
+	//saves the user's public key to the group's database
 	const saveSecurity = async () => {
 		if (selectedGroup) {
 			setSecureVoting(addingKey);
@@ -1212,8 +1111,9 @@ function App() {
 		}
 	};
 	
+	//generates a new pair of armoured PGP keys with the provided passphrase
 	const generatePGPKeys = async () => {
-		const { privateKey, publicKey, revocationCertificate} = await generateKey({
+		const { privateKey, publicKey } = await generateKey({
 			format: 'armored',
 			userIDs: [{ name: 'Steve radshaw', email: 'Billy_Turnip@Firebase.com' }],
 			curve: 'ed25519',
@@ -1224,41 +1124,44 @@ function App() {
 		setMadeKeys(true);
 	};
 
+	//handles an election vote when using the secure blockchain voting process
 	const blockchainVote = async () => {
-		try {
-			const accounts = await web3.eth.getAccounts();
-			const account = accounts[0];
-			let address = '0x91A0742186295507186B7D272d44ca38B30486BC';
-			if (selectedElection) {
-				address = selectedElection.address;
+		if (selectedElection) {
+			try {
+				const accounts = await web3.eth.getAccounts();
+				const account = accounts[0];
+				const address = selectedElection.address;
+				
+				// Initialize contract
+				const contract: any = new web3.eth.Contract(contractABI, address);
+				const hexed: string = web3.utils.toHex(username);
+				const data = contract.methods.vote(hexed, encrypted).encodeABI();
+				
+				// Create transaction object
+				const tx: Transaction = {from: account, to: address, data: data, gas: web3.utils.toHex("800")};
+				await web3.eth.sendTransaction(tx);
+				console.log("Encrypted Vote Successfully stored with Election's Smart Contract at ", address);
+				
+				const ref = doc(collection(doc(collection(doc(groupsRef, selectedGroup?.unique), 'elections'), selectedElection?.unique), 'voters'), username);
+				const timestamp = Date.now();
+				await updateDoc(ref, {unique: username, blockchain: true, time: timestamp});
+				let unique = "";
+				if (selectedGroup) {
+					unique = selectedGroup.unique;
+				}
+				moveToLoggedIn();
+				await selectGroup(unique);
+			} catch (error) {
+				console.error("error submitting blockchain vote:", error);
 			}
-			// Create a new Ethereum account (for testing)
-			//const account = web3.eth.accounts.create();
-			
-			// Initialize contract
-			const contract: any = new web3.eth.Contract(contractABI, address);
-			const hexed: string = web3.utils.toHex(username);
-			const data = contract.methods.vote(hexed, encrypted).encodeABI();
-			//await data.send({from: account, to: address, gas: web3.utils.toHex("800")})
-			
-			// Create transaction object
-			const tx: Transaction = { from: account, to: address, data: data, gas: web3.utils.toHex("800") };
-			await web3.eth.sendTransaction(tx);
-			console.log("Encrypted Vote Successfully stored with Election's Smart Contract at ", address);
-			
-			const ref = doc(collection(doc(collection(doc(groupsRef, selectedGroup?.unique), 'elections'), selectedElection?.unique), 'voters'), username);
-			const timestamp = Date.now();
-			await updateDoc(ref, { unique: username, blockchain: true, time: timestamp });
-			let unique = "";
-			if (selectedGroup) {
-				unique = selectedGroup.unique;
-			}
-			moveToLoggedIn();
-			await selectGroup(unique);
-		} catch (error) {
-			console.log(error);
+		} else {
+			console.error("election not selected");
 		}
 	};
+	
+	//takes the submitted private key and passphrase and encrypts the user's vote
+	//NOTE: this is not secure in its current format, but is an example for a voting platform that uses a native application,
+	//a native application could have the armoured private key stored on the user's device, allowing it to be retrieved and offer a popup that requests the passphrase
 	const encryptVote = async () => {
 		if (newPub !== "") {
 			try {
@@ -1280,12 +1183,7 @@ function App() {
 		}
 	};
 	
-	// Display logic
-	let textColour = darkMode ? 'white' : 'black';
-	let background = darkMode ? 'black' : 'white';
-	let boxBack = darkMode ? 'darkgrey' : 'lightgrey';
-	let border1 = darkMode ? '1px solid white' : '1px solid black';
-	
+	//handles group roles
 	const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
 		setSelectedRole({ ...selectedRole, [event.target.name]: event.target.checked });
 	};
@@ -1313,21 +1211,17 @@ function App() {
 		}
 	};
 	
-	//let border2 = darkMode ? 'white' : 'black';
+	// Display variables
+	let textColour = darkMode ? 'white' : 'black';
+	let background = darkMode ? 'black' : 'white';
+	let boxBack = darkMode ? 'darkgrey' : 'lightgrey';
+	let border1 = darkMode ? '1px solid white' : '1px solid black';
+	
+	//webpage display logic
 	if (loggedIn) {
-		if (isJoining) {
-			return (
-				<div className="App" style={{ display: 'flex', justifyContent: 'center', backgroundColor: background, color: textColour }}>
-					<form onSubmit={handleDisplayUpdate} style={{ display: 'flex', flexDirection: 'column', margin: '10px', padding: '10px', backgroundColor: 'lightskyblue', border: border1 }}>
-						<label style={{ fontSize: '16px'}}>Set your displayed name: </label>
-						<input type="text" value={groupDisplayName} onChange={e => setGroupDisplayName(e.target.value)} placeholder="Displayed Name" required style={{fontSize: '20px'}}/>
-						<label style={{ fontSize: '16px' }}>Hide your username ID from displaying in this group:
-							<input type="checkbox" checked={groupHiding} onChange={(e) => setGroupHiding(e.target.checked)} />
-						</label>
-					</form>
-				</div>
-			)
-		} else if (isElections) {
+		
+		//displays the election creation page
+		if (isElections) {
 			return (
 				<div className="App" style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', backgroundColor: background, color: textColour }}>
 					<form onSubmit={handleElectionCreate} style={{ display: 'flex', flexDirection: 'row', width: '100%', height: '100vh' }}>
@@ -1376,6 +1270,8 @@ function App() {
 					</form>
 				</div>
 			);
+			
+		//displays the group roles and permissions page
 		} else if (isPermissions) {
 			return (
 				<div className="App" style={{ display: 'flex', flexDirection: 'row', height: '100vh', backgroundColor: background, color: textColour }}>
@@ -1428,6 +1324,8 @@ function App() {
 					</div>
 				</div>
 			);
+			
+		//displays the group editing page
 		} else if (isEditing) {
 			return (
 				<div className="App" style={{ display: 'flex', height: '100vh', width: '100%', backgroundColor: background, color: textColour }}>
@@ -1472,6 +1370,8 @@ function App() {
 					</form>
 				</div>
 			);
+			
+		//displays the group creation page
 		} else if (isCreating) {
 			return (
 				<div className="App" style={{ display: 'flex', height: '100vh', backgroundColor: background, color: textColour }}>
@@ -1516,6 +1416,8 @@ function App() {
 					</form>
 				</div>
 			);
+			
+		//displays the group finding and searching page
 		} else if (isFinding) {
 			return (
 				<div className="App" style={{ display: 'flex', margin: '0px', padding: '10px', height: '100vh', width: '100%', boxSizing: 'border-box', backgroundColor: background, color: textColour }}>
@@ -1701,6 +1603,8 @@ function App() {
 					</div>
 				</div>
 			);
+			
+		//displays the delegation rules page
 		} else if (isRules) {
 			if (categories.length === 0) {
 				return (
@@ -1724,7 +1628,7 @@ function App() {
 						{rules.length === 0 ? (
 							<div style={{display: 'flex', flex: 1, flexDirection: 'column', height: '100%', padding: '20px 5px', borderRight: border1}}>
 								<div style={{display: 'flex', justifyContent: 'space-evenly', margin: '10px'}}>
-									<button type="button" onClick={() => cancelRules()} style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Cancel</button>
+									<button type="button" onClick={() => cancel()} style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Cancel</button>
 									<button type="button" onClick={() => setDarkMode(!darkMode)} style={{padding: '5px 5px', fontSize: '16px', boxSizing: 'border-box'}}>Toggle Dark Mode</button>
 								</div>
 								<p style={{fontSize: '40px', textAlign: 'center'}}>You have no delegation rules in place yet, create one to get started!</p>
@@ -1732,7 +1636,7 @@ function App() {
 						) : (
 							<div style={{display: 'flex', flex: 1, flexDirection: 'column', maxHeight: '100vh', padding: '20px 5px', overflow: 'auto', borderRight: border1, boxSizing: 'border-box'}}>
 								<div style={{display: 'flex', justifyContent: 'space-between', margin: '10px 50px'}}>
-									<button type="button" onClick={() => cancelRules()} style={{padding: '5px 5px', fontSize: '20px', boxSizing: 'border-box'}}>Cancel</button>
+									<button type="button" onClick={() => cancel()} style={{padding: '5px 5px', fontSize: '20px', boxSizing: 'border-box'}}>Cancel</button>
 									<button type="button" onClick={() => setDarkMode(!darkMode)} style={{padding: '5px 5px', fontSize: '20px', boxSizing: 'border-box'}}>Toggle Dark Mode</button>
 								</div>
 								<p style={{fontSize: '32px'}}>Delegation Rules</p>
@@ -1795,6 +1699,8 @@ function App() {
 					</div>
 				);
 			}
+			
+		//displays the voting security with PGP keys page
 		} else if (isSecurity) {
 			return (
 				<div className="App" style={{ display: 'flex', height: '100vh', width: '100%', backgroundColor: background, color: textColour }}>
@@ -1847,6 +1753,8 @@ function App() {
 					</div>
 				</div>
 			);
+			
+		//displays the secure blockchain voting page
 		} else if (isVoting) {
 			return (
 				<div className="App" style={{ display: 'flex', height: '100vh', width: '100%', backgroundColor: background, color: textColour }}>
@@ -1888,6 +1796,8 @@ function App() {
 					</div>
 				</div>
 			);
+			
+		//displays the main logged in page, also displays main group page if a group is selected
 		} else {
 			return (
 				<div className="App" style={{ display: 'flex', margin: '0px', padding: '0px', height: '100vh', width: '100%', backgroundColor: background, color: textColour }}>
@@ -2126,6 +2036,7 @@ function App() {
 		}
 	}
 	
+	//displays the user account creation page
 	if (isSignUp) {
 		return (
 			<div className="App" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: background, color: textColour }}>
@@ -2146,6 +2057,7 @@ function App() {
 		);
 	}
 	
+	//displays the user login page
 	return (
 		<div className="App" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: background, color: textColour }}>
 			<form onSubmit={handleSignIn} style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '400px' }}>
