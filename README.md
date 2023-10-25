@@ -1,46 +1,14 @@
-# Getting Started with Create React App
+This repo contains the source code created for a prototype of a voting platform that uses the paradigm of liquid democracy.
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+The voting platform allows users to create and join groups, where they can then participate in elections.
+These elections allow each voter to either vote directly for their chosen option, or they can delegate their vote to another group member.
+The platform also explores voting security, and gives users the option to encrypt their votes with PGP keys and upload them to an election's smart contract on a local Ethereum testing environment.
+Cloud functions are also used for security critical tasks, such as creating an elections PGP keys, or calculating election results.
+Election Private keys are also stored with Google's Secret Manager, these can then only be retrieved by a cloud function.
+All other data is stored in a Firebase database.
 
-## Available Scripts
-
-In the project directory, you can run:
-
-### `npm start`
-
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
-
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
-
-### `npm test`
-
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
-
-### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
-
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
-
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+To run your own platform, create a firebase instance and add the config details where outlined in src/firebase.ts
+config details can be found with this link: https://firebase.google.com/docs/web/learn-more#config-object
+I then recommend creating an instance of each cloud function, namely: calculateResults, checkElectionDeadline, and generateElectionKeys
+The source code for each can be found in the .js files with the above names in the repo. Each functions dependencies should be put in their package.json file, with the recommended dependencies included in a comment at the bottom of each file.
+Some of the cloud function do require your firebase config details, this is outlined in a comment in the cloud functions source code, showing where to put the config information.
