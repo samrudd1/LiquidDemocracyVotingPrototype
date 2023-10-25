@@ -111,3 +111,16 @@ exports.calculateResults = functions.https.onCall(async (data, context) => {
     return { success: true, percentages: percentageVotes };
 
 });
+
+//package.json:
+/*
+{
+  "dependencies": {
+    "@google-cloud/secret-manager": "^5.0.0",
+    "firebase-admin": "^11.10.1",
+    "firebase-functions": "^4.4.1",
+    "openpgp": "~5.10.0",
+    "typescript": "^5.1.3"
+  }
+}
+*/
