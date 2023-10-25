@@ -1,3 +1,4 @@
+//cloud function source code
 const admin = require('firebase-admin');
 const functions = require('firebase-functions');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
@@ -106,7 +107,7 @@ exports.calculateResults = functions.https.onCall(async (data, context) => {
 
     await docRef.update({ counts: voteCounts, percentages: percentageVotes });
 
-    // In a Cloud Function, you typically return a result to indicate completion
+    // return a result to indicate completion
     return { success: true, percentages: percentageVotes };
 
 });
